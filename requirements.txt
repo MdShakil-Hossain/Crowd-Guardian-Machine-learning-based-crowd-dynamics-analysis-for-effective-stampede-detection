@@ -1,0 +1,17 @@
+streamlit==1.36.0
+opencv-python
+numpy
+pandas
+tqdm
+scipy
+tensorflow==2.16.1
+streamlit==1.36.0
+opencv-python
+numpy
+pandas
+tqdm
+scipy
+tensorflow==2.16.1
+# Optional (only needed if you pick AVI and want the MP4 preview):
+moviepy
+imageio-ffmpeg
