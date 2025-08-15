@@ -1,7 +1,3 @@
-@st.cache_resource(show_spinner=False)
-def load_cnn(path):
-    import tensorflow as tf
-    return tf.keras.models.load_model(path, compile=False)
 # app.py — Crowd Guardian (Video + Image) — session_state + stable H.264 preview
 
 import os
@@ -146,9 +142,10 @@ with st.sidebar:
 # Model load
 # =========================
 @st.cache_resource(show_spinner=False)
-def load_cnn(path):
+def load_cnn(path: str):
     import tensorflow as tf
-    return tf.keras.models.load_model(path)
+    # With TF 2.20 / Keras 3, compile=False avoids legacy-object errors for .h5
+    return tf.keras.models.load_model(path, compile=False)
 
 cnn_model, load_err = None, None
 if model_path:
@@ -439,4 +436,3 @@ if go:
                                            file_name="labeled.png", mime="image/png", key="dl_image")
                 else:
                     st.image(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB), caption=lbl_text, use_column_width=True)
-
