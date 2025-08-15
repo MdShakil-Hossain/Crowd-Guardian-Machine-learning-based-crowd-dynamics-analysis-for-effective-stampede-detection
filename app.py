@@ -1,4 +1,4 @@
-# app.py — Crowd Guardian (Video) — session_state + stable H.264 preview
+# app.py — Crowd Guardian (Video) — silent model load + polished UI + logo
 
 import os
 import cv2
@@ -11,27 +11,42 @@ import pandas as pd
 from scipy.optimize import linear_sum_assignment
 import streamlit as st
 
-# ---------- URL / path helpers for model loading ----------
+# ---------- URL / path helpers for model & logo ----------
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import urllib.request, hashlib, sys
+from typing import Optional
 
 APP_DIR = Path(__file__).resolve().parent
 CACHE_DIR = APP_DIR / "models"
 CACHE_DIR.mkdir(exist_ok=True)
 
+# Your Dropbox model (direct download). You can override with a secret MODEL_URL.
 DEFAULT_MODEL_URL = (
     "https://www.dropbox.com/scl/fi/zswpw1ucbj7bkkkykc8oc/deep_cnn_stampede.h5"
     "?rlkey=e863b9skyvpyn0dn4gbwxd71s&st=uvgqjq7q&dl=1"
 )
+MODEL_URL = st.secrets.get("MODEL_URL", DEFAULT_MODEL_URL)
+
+# ---- fixed defaults (no UI knobs) ----
+CNN_THRESHOLD = 0.50
+ABS_DROP      = 2
+REL_DROP      = 0.20
+MIN_EVENT_SEC = 1.0
+COMBINE_RULE  = "and"
+MIN_FRAC      = 0.00005
+MAX_FRAC      = 0.0020
+MIN_CIRC      = 0.20
+MIN_INER      = 0.10
+DRAW_LINKS    = True
+TARGET_FPS    = None  # None = all frames
 
 def _normalize_dropbox(url: str) -> str:
-    """Ensure Dropbox URL is direct-download."""
     if "dropbox.com" not in url:
         return url
     parts = urlparse(url)
     q = parse_qs(parts.query)
-    q["dl"] = ["1"]  # force direct
+    q["dl"] = ["1"]  # force direct download
     new_q = urlencode({k: v[0] for k, v in q.items()})
     return urlunparse(parts._replace(query=new_q))
 
@@ -47,7 +62,7 @@ def _download_to_cache(url: str) -> str:
 
 def _resolve_model_path(path_or_url: str) -> str:
     p = (path_or_url or "").strip()
-    if p.startswith("http://") or p.startswith("https://"):
+    if p.startswith(("http://", "https://")):
         return _download_to_cache(p)
     candidate = Path(p)
     if not candidate.is_absolute():
@@ -56,39 +71,107 @@ def _resolve_model_path(path_or_url: str) -> str:
         raise FileNotFoundError(f"Model not found at: {candidate}")
     return str(candidate.resolve())
 
+# ---------- Logo ----------
+# Looks for assets/Crowd_Guardian_EWU_logo.png (preferred), then ./Crowd_Guardian_EWU_logo.png,
+# or you can set LOGO_URL in secrets to host it elsewhere.
+DEFAULT_LOGO_PATHS = [
+    APP_DIR / "assets" / "Crowd_Guardian_EWU_logo.png",
+    APP_DIR / "Crowd_Guardian_EWU_logo.png",
+]
+LOGO_SRC = st.secrets.get("LOGO_URL", None)
+
+def _load_logo_bytes(src: Optional[str]) -> Optional[bytes]:
+    try:
+        if src and src.startswith(("http://", "https://")):
+            with urllib.request.urlopen(src) as r:
+                return r.read()
+        if src:  # local explicit path
+            with open(src, "rb") as f:
+                return f.read()
+        # try default paths
+        for p in DEFAULT_LOGO_PATHS:
+            if p.exists():
+                with open(p, "rb") as f:
+                    return f.read()
+    except Exception:
+        pass
+    return None
+
+_logo_bytes = _load_logo_bytes(LOGO_SRC)
+
 # =========================
-# Streamlit page config & theming
+# Page config & custom style
 # =========================
 st.set_page_config(
     page_title="Crowd Guardian: Machine learning based crowd dynamics analysis for effective stampede detection",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="collapsed",
 )
+
 st.markdown(
     """
     <style>
-    /* Sidebar look */
-    [data-testid="stSidebar"] > div:first-child {
-        background: linear-gradient(180deg, #0f172a 0%, #111827 60%, #1f2937 100%);
-        color: #e5e7eb;
+    /* Minimal, modern feel */
+    .main .block-container {padding-top: 1.2rem; padding-bottom: 3rem; max-width: 1100px;}
+    h1, h2, h3 {letter-spacing: .2px;}
+    .hero {
+        padding: 16px 20px;
+        border-radius: 18px;
+        background: radial-gradient(1200px 400px at 10% -10%, rgba(59,130,246,.18), transparent),
+                    linear-gradient(180deg, rgba(30,41,59,.45), rgba(2,6,23,.35));
+        border: 1px solid rgba(148,163,184,.15);
     }
-    .sidebar-card {
-        border: 1px solid rgba(255,255,255,0.08);
-        background: rgba(255,255,255,0.04);
-        border-radius: 14px;
-        padding: 12px 14px;
-        margin-bottom: 12px;
+    .hero .title {font-size: 1.35rem; margin: 0 0 .25rem 0;}
+    .hero .subtitle {margin: 0; opacity: .85}
+    .upload-card {
+        border: 1px dashed rgba(148,163,184,.35); border-radius: 16px; padding: 14px;
+        background: rgba(30,41,59,.25);
     }
     .badge-ok {display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;
         background: rgba(16,185,129,0.18); color:#a7f3d0; border:1px solid rgba(16,185,129,0.35);}
     .badge-err {display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;
         background: rgba(239,68,68,0.18); color:#fecaca; border:1px solid rgba(239,68,68,0.35);}
+    /* Sidebar branding only (no inputs) */
+    [data-testid="stSidebar"] > div:first-child {
+        background: linear-gradient(180deg, #0f172a 0%, #111827 60%, #1f2937 100%);
+        color: #e5e7eb;
+    }
+    .sidebar-card {border: 1px solid rgba(255,255,255,0.08);
+        background: rgba(255,255,255,0.04); border-radius: 14px; padding: 12px 14px; margin: 12px;}
     .small {font-size:12px; opacity:0.8;}
+    .footer {opacity:.65; font-size:12px; margin-top: 2rem;}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-st.title("Crowd Guardian: Machine learning based crowd dynamics analysis for effective stampede detection")
+# Sidebar: branding + environment
+with st.sidebar:
+    if _logo_bytes:
+        st.image(_logo_bytes, width=120)
+    st.markdown('<div class="sidebar-card"><b>🛡️ Crowd Guardian</b><br/>'
+                'Machine-learning aided detection of crowd stampedes.</div>', unsafe_allow_html=True)
+    try:
+        import tensorflow as tf
+        tf_ver = tf.__version__
+    except Exception:
+        tf_ver = "not loaded"
+    st.markdown(
+        f'<div class="sidebar-card small">Py {sys.version.split()[0]} • TF {tf_ver} '
+        f'• NumPy {np.__version__} • OpenCV {cv2.__version__}</div>',
+        unsafe_allow_html=True,
+    )
+
+# ======= Hero (with logo) =======
+st.markdown('<div class="hero">', unsafe_allow_html=True)
+col_logo, col_text = st.columns([1, 9])
+with col_logo:
+    if _logo_bytes:
+        st.image(_logo_bytes, width=72)
+with col_text:
+    st.markdown('<div class="title">Crowd Guardian</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subtitle">Machine learning based crowd dynamics analysis for effective stampede detection</div>', unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
 
 # =========================
 # Helpers
@@ -97,8 +180,8 @@ def sec_to_tc(sec: float) -> str:
     h = int(sec // 3600); m = int((sec % 3600) // 60); s = sec % 60
     return f"{h:02d}:{m:02d}:{s:06.3f}"
 
-def build_blob_detector(frame_w, frame_h, min_frac=0.00005, max_frac=0.0020,
-                        min_circ=0.2, min_inertia=0.1, thresh_step=10):
+def build_blob_detector(frame_w, frame_h, min_frac=MIN_FRAC, max_frac=MAX_FRAC,
+                        min_circ=MIN_CIRC, min_inertia=MIN_INER, thresh_step=10):
     frame_area = float(frame_w * frame_h)
     minArea = max(5.0, min_frac * frame_area)
     maxArea = max(minArea + 1.0, max_frac * frame_area)
@@ -141,7 +224,7 @@ def preprocess_for_cnn(gray):
     x = np.expand_dims(x, axis=(0, -1))
     return x
 
-def combine_labels(y_heads, y_cnn, rule="and"):
+def combine_labels(y_heads, y_cnn, rule=COMBINE_RULE):
     rule = (rule or "and").lower()
     if rule == "and": return 1 if (y_heads == 1 and y_cnn == 1) else 0
     if rule == "or": return 1 if (y_heads == 1 or y_cnn == 1) else 0
@@ -160,11 +243,9 @@ def _get_ffmpeg_exe():
         return None
 
 def transcode_to_h264(src_path: str, dst_path: str, fps: float):
-    """Convert src video to H.264 MP4 (yuv420p + faststart) for browser playback."""
     ff = _get_ffmpeg_exe()
     if ff is None:
         return src_path, False, "ffmpeg not found on PATH and imageio-ffmpeg not available"
-
     os.makedirs(os.path.dirname(dst_path), exist_ok=True)
     cmd = [
         ff, "-y", "-loglevel", "error",
@@ -180,44 +261,8 @@ def transcode_to_h264(src_path: str, dst_path: str, fps: float):
     log = (proc.stderr or proc.stdout or "")
     return (dst_path if ok else src_path), ok, log
 
-# ---------- Sidebar (decorated, no "Settings") ----------
-with st.sidebar:
-    st.markdown("### 🛡️ Crowd Guardian")
-    st.markdown(
-        '<div class="sidebar-card">Deep-learning aided detection of crowd stampedes. '
-        'Provide a model path or URL and upload a video to begin.</div>',
-        unsafe_allow_html=True,
-    )
-
-    # Model source (URL or local path). Default is your Dropbox link.
-    model_path = st.text_input(
-        "Model (.h5) path or URL",
-        value=DEFAULT_MODEL_URL,
-        label_visibility="visible",
-        help="You can paste a local path in the repo or a direct URL (Dropbox/S3/etc).",
-    )
-
-    # Optional: upload .h5 directly
-    up = st.file_uploader("…or upload a .h5 file", type=["h5"], key="h5_upl")
-    if up is not None:
-        up_path = CACHE_DIR / "uploaded_model.h5"
-        up_path.write_bytes(up.read())
-        model_path = str(up_path)
-
-    # Tiny env card
-    try:
-        import tensorflow as tf
-        tf_ver = tf.__version__
-    except Exception:
-        tf_ver = "not loaded"
-    st.markdown(
-        f'<div class="sidebar-card small">Py {sys.version.split()[0]} • TF {tf_ver} '
-        f'• NumPy {np.__version__} • OpenCV {cv2.__version__}</div>',
-        unsafe_allow_html=True,
-    )
-
 # =========================
-# Model load (cached)
+# Model load (silent & cached)
 # =========================
 @st.cache_resource(show_spinner=False)
 def load_cnn(path_or_url: str):
@@ -226,37 +271,34 @@ def load_cnn(path_or_url: str):
     return tf.keras.models.load_model(resolved, compile=False)
 
 cnn_model, load_err = None, None
-if model_path:
-    try:
-        cnn_model = load_cnn(model_path)
-    except Exception as e:
-        load_err = str(e)
+try:
+    cnn_model = load_cnn(MODEL_URL)
+except Exception as e:
+    load_err = str(e)
 
-# Status chip in main area
+# Status chip below hero
 if load_err:
-    st.error(f"Failed to load model: {load_err}")
-elif cnn_model is not None:
-    st.markdown('<span class="badge-ok">Model loaded</span>', unsafe_allow_html=True)
+    st.markdown(f'<span class="badge-err">Model error</span> — {load_err}', unsafe_allow_html=True)
 else:
-    st.markdown('<span class="badge-err">Model not loaded</span>', unsafe_allow_html=True)
+    st.markdown('<span class="badge-ok">Model loaded</span>', unsafe_allow_html=True)
 
 # =========================
-# Video analysis (defaults; no UI knobs)
+# Video analysis (fixed params)
 # =========================
 def analyze_video(
     video_path,
     model,
-    target_fps=None,
-    cnn_threshold=0.5,
-    abs_drop=2,
-    rel_drop=0.20,
-    min_event_sec=1.0,
-    combine_rule="and",
-    min_frac=0.00005,
-    max_frac=0.0020,
-    min_circ=0.2,
-    min_iner=0.1,
-    draw_links=True
+    target_fps=TARGET_FPS,
+    cnn_threshold=CNN_THRESHOLD,
+    abs_drop=ABS_DROP,
+    rel_drop=REL_DROP,
+    min_event_sec=MIN_EVENT_SEC,
+    combine_rule=COMBINE_RULE,
+    min_frac=MIN_FRAC,
+    max_frac=MAX_FRAC,
+    min_circ=MIN_CIRC,
+    min_iner=MIN_INER,
+    draw_links=DRAW_LINKS
 ):
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -271,12 +313,10 @@ def analyze_video(
 
     detector = build_blob_detector(W, H, min_frac, max_frac, min_circ, min_iner)
 
-    # CSV outputs
     frames_rows = [("frame_index","time_sec","timecode","head_count","delta_vs_prev",
                     "prob_cnn","cnn_label","heads_label","final_label")]
     events_rows = [("start_frame","end_frame","start_time_sec","end_time_sec","start_tc","end_tc","duration_sec")]
 
-    # Persistent files under ./outputs
     out_dir = os.path.join(os.getcwd(), "outputs")
     os.makedirs(out_dir, exist_ok=True)
     base = os.path.splitext(os.path.basename(video_path))[0]
@@ -284,7 +324,6 @@ def analyze_video(
     raw_path = os.path.join(out_dir, f"{base}_{stamp}_raw.avi")
     mp4_path = os.path.join(out_dir, f"{base}_{stamp}_labeled.mp4")
 
-    # Write robust RAW first (MJPG AVI)
     fourcc = cv2.VideoWriter_fourcc(*"MJPG")
     out = cv2.VideoWriter(raw_path, fourcc, fps if fps and fps > 0 else 25.0, (W, H))
     if not out.isOpened():
@@ -372,7 +411,6 @@ def analyze_video(
     cap.release()
     if out.isOpened(): out.release()
 
-    # Transcode to browser-playable H.264 MP4
     playable_path, ok, log = transcode_to_h264(raw_path, mp4_path, fps)
     if not ok:
         st.warning("Transcode failed; preview may not play. Details: " +
@@ -385,15 +423,18 @@ def analyze_video(
     return df_frames, df_events, playable_path
 
 # =========================
-# UI actions (VIDEO ONLY)
+# UI (video only)
 # =========================
+st.subheader("Upload a crowd video")
+st.markdown('<div class="upload-card">', unsafe_allow_html=True)
 uploaded = st.file_uploader(
-    "Upload a crowd video (MP4/MOV/MKV/AVI/MPEG4)",
-    type=["mp4","mov","mkv","avi","mpeg4"]
+    "Drag & drop a video or browse",
+    type=["mp4","mov","mkv","avi","mpeg4"],
+    label_visibility="collapsed"
 )
+st.markdown("</div>", unsafe_allow_html=True)
 go = st.button("Analyze", type="primary")
 
-# Re-render previous results so downloads don't reset
 def render_results(res):
     df_frames = res["df_frames"]
     df_events = res["df_events"]
@@ -437,9 +478,7 @@ def render_results(res):
     else:
         st.info("Preview unavailable.")
 
-    if st.button("Clear results"):
-        st.session_state.pop("video_results", None)
-        st.rerun()
+    st.markdown('<div class="footer">© Crowd Guardian</div>', unsafe_allow_html=True)
 
 if "video_results" in st.session_state:
     render_results(st.session_state["video_results"])
@@ -448,30 +487,15 @@ if go:
     if load_err:
         st.error(f"Failed to load model: {load_err}")
     elif not cnn_model:
-        st.error("Provide a valid model path or URL to your .h5.")
+        st.error("Model not loaded.")
     elif not uploaded:
         st.warning("Please upload a video.")
     else:
         tmp_in = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded.name)[1])
         tmp_in.write(uploaded.read()); tmp_in.close()
 
-        # Fixed defaults (no UI knobs)
         with st.spinner("Analyzing video…"):
-            df_frames, df_events, labeled_path = analyze_video(
-                tmp_in.name,
-                cnn_model,
-                target_fps=None,          # all frames
-                cnn_threshold=0.50,
-                abs_drop=2,
-                rel_drop=0.20,
-                min_event_sec=1.0,
-                combine_rule="and",
-                min_frac=0.00005,
-                max_frac=0.0020,
-                min_circ=0.20,
-                min_iner=0.10,
-                draw_links=True
-            )
+            df_frames, df_events, labeled_path = analyze_video(tmp_in.name, cnn_model)
 
         st.session_state["video_results"] = {
             "df_frames": df_frames,
