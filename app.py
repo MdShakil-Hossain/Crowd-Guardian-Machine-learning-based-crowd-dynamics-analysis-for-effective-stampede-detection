@@ -1,4 +1,4 @@
-# app.py — Crowd Guardian (Video + Image) — session_state + stable H.264 preview
+# app.py — Crowd Guardian (Video) — session_state + stable H.264 preview
 
 import os
 import cv2
@@ -14,11 +14,16 @@ import streamlit as st
 # ---------- URL / path helpers for model loading ----------
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
-import urllib.request, hashlib
+import urllib.request, hashlib, sys
 
 APP_DIR = Path(__file__).resolve().parent
 CACHE_DIR = APP_DIR / "models"
 CACHE_DIR.mkdir(exist_ok=True)
+
+DEFAULT_MODEL_URL = (
+    "https://www.dropbox.com/scl/fi/zswpw1ucbj7bkkkykc8oc/deep_cnn_stampede.h5"
+    "?rlkey=e863b9skyvpyn0dn4gbwxd71s&st=uvgqjq7q&dl=1"
+)
 
 def _normalize_dropbox(url: str) -> str:
     """Ensure Dropbox URL is direct-download."""
@@ -26,7 +31,7 @@ def _normalize_dropbox(url: str) -> str:
         return url
     parts = urlparse(url)
     q = parse_qs(parts.query)
-    q["dl"] = ["1"]
+    q["dl"] = ["1"]  # force direct
     new_q = urlencode({k: v[0] for k, v in q.items()})
     return urlunparse(parts._replace(query=new_q))
 
@@ -44,7 +49,6 @@ def _resolve_model_path(path_or_url: str) -> str:
     p = (path_or_url or "").strip()
     if p.startswith("http://") or p.startswith("https://"):
         return _download_to_cache(p)
-    # local: try relative to app dir, then absolute
     candidate = Path(p)
     if not candidate.is_absolute():
         candidate = APP_DIR / candidate
@@ -53,10 +57,38 @@ def _resolve_model_path(path_or_url: str) -> str:
     return str(candidate.resolve())
 
 # =========================
-# Streamlit UI config
+# Streamlit page config & theming
 # =========================
-st.set_page_config(page_title="Crowd Guardian – Stampede Detection", layout="wide")
-st.title("🎥 Crowd Guardian — Stampede Detection (Grayscale CNN + Head Count Drop)")
+st.set_page_config(
+    page_title="Crowd Guardian: Machine learning based crowd dynamics analysis for effective stampede detection",
+    layout="wide"
+)
+st.markdown(
+    """
+    <style>
+    /* Sidebar look */
+    [data-testid="stSidebar"] > div:first-child {
+        background: linear-gradient(180deg, #0f172a 0%, #111827 60%, #1f2937 100%);
+        color: #e5e7eb;
+    }
+    .sidebar-card {
+        border: 1px solid rgba(255,255,255,0.08);
+        background: rgba(255,255,255,0.04);
+        border-radius: 14px;
+        padding: 12px 14px;
+        margin-bottom: 12px;
+    }
+    .badge-ok {display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;
+        background: rgba(16,185,129,0.18); color:#a7f3d0; border:1px solid rgba(16,185,129,0.35);}
+    .badge-err {display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;
+        background: rgba(239,68,68,0.18); color:#fecaca; border:1px solid rgba(239,68,68,0.35);}
+    .small {font-size:12px; opacity:0.8;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.title("Crowd Guardian: Machine learning based crowd dynamics analysis for effective stampede detection")
 
 # =========================
 # Helpers
@@ -104,7 +136,6 @@ def assign_matches(prev_pts, curr_pts, max_dist):
     return matches, sorted(list(un_prev)), sorted(list(un_curr))
 
 def preprocess_for_cnn(gray):
-    # grayscale -> 100x100 -> [0,1] -> (1,100,100,1)
     resized = cv2.resize(gray, (100, 100), interpolation=cv2.INTER_AREA)
     x = resized.astype("float32") / 255.0
     x = np.expand_dims(x, axis=(0, -1))
@@ -129,10 +160,7 @@ def _get_ffmpeg_exe():
         return None
 
 def transcode_to_h264(src_path: str, dst_path: str, fps: float):
-    """
-    Convert src video to H.264 MP4 (yuv420p + faststart) for browser playback.
-    Returns (final_path, ok, log). Never deletes src.
-    """
+    """Convert src video to H.264 MP4 (yuv420p + faststart) for browser playback."""
     ff = _get_ffmpeg_exe()
     if ff is None:
         return src_path, False, "ffmpeg not found on PATH and imageio-ffmpeg not available"
@@ -152,45 +180,41 @@ def transcode_to_h264(src_path: str, dst_path: str, fps: float):
     log = (proc.stderr or proc.stdout or "")
     return (dst_path if ok else src_path), ok, log
 
-# =========================
-# Sidebar controls
-# =========================
+# ---------- Sidebar (decorated, no "Settings") ----------
 with st.sidebar:
-    st.header("⚙️ Settings")
-    input_mode = st.selectbox("Input Type", ["Video", "Image"], index=0)
-
-    # You can paste a local path (repo file) or a URL (e.g., Dropbox)
-    model_path = st.text_input(
-        "Model (.h5) path or URL",
-        value="https://www.dropbox.com/scl/fi/zswpw1ucbj7bkkkykc8oc/deep_cnn_stampede.h5"
-              "?rlkey=e863b9skyvpyn0dn4gbwxd71s&st=uvgqjq7q&dl=1"
+    st.markdown("### 🛡️ Crowd Guardian")
+    st.markdown(
+        '<div class="sidebar-card">Deep-learning aided detection of crowd stampedes. '
+        'Provide a model path or URL and upload a video to begin.</div>',
+        unsafe_allow_html=True,
     )
 
-    # Optional: upload a .h5 directly at runtime
+    # Model source (URL or local path). Default is your Dropbox link.
+    model_path = st.text_input(
+        "Model (.h5) path or URL",
+        value=DEFAULT_MODEL_URL,
+        label_visibility="visible",
+        help="You can paste a local path in the repo or a direct URL (Dropbox/S3/etc).",
+    )
+
+    # Optional: upload .h5 directly
     up = st.file_uploader("…or upload a .h5 file", type=["h5"], key="h5_upl")
     if up is not None:
         up_path = CACHE_DIR / "uploaded_model.h5"
         up_path.write_bytes(up.read())
         model_path = str(up_path)
 
-    cnn_threshold = st.slider("CNN threshold (τ)", 0.0, 1.0, 0.50, 0.01)
-
-    # Video-only
-    combine_rule = st.selectbox("Combine rule (video)", ["and", "or", "cnn_only", "heads_only"], index=0)
-    st.markdown("**Head-drop rule (video)**")
-    abs_drop = st.number_input("Absolute drop ≥", min_value=0, value=2, step=1)
-    rel_drop = st.slider("Relative drop ≥", 0.0, 1.0, 0.20, 0.01)
-    min_event_sec = st.number_input("Min event duration (s)", min_value=0.0, value=1.0, step=0.5)
-    st.markdown("**Sampling (video)**")
-    target_fps = st.number_input("Target FPS (0 = all frames)", min_value=0.0, value=0.0, step=1.0)
-
-    st.markdown("**Blob detector (visual only)**")
-    min_frac = st.number_input("Min frac area", value=0.00005, format="%.6f")
-    max_frac = st.number_input("Max frac area", value=0.0020, format="%.6f")
-    min_circ = st.slider("Min circularity", 0.0, 1.0, 0.20, 0.05)
-    min_iner = st.slider("Min inertia", 0.0, 1.0, 0.10, 0.05)
-    draw_links = st.checkbox("Draw matches between frames (video)", value=True)
-    draw_blobs_on_image = st.checkbox("Draw head blobs on image (visual only)", value=True)
+    # Tiny env card
+    try:
+        import tensorflow as tf
+        tf_ver = tf.__version__
+    except Exception:
+        tf_ver = "not loaded"
+    st.markdown(
+        f'<div class="sidebar-card small">Py {sys.version.split()[0]} • TF {tf_ver} '
+        f'• NumPy {np.__version__} • OpenCV {cv2.__version__}</div>',
+        unsafe_allow_html=True,
+    )
 
 # =========================
 # Model load (cached)
@@ -208,8 +232,16 @@ if model_path:
     except Exception as e:
         load_err = str(e)
 
+# Status chip in main area
+if load_err:
+    st.error(f"Failed to load model: {load_err}")
+elif cnn_model is not None:
+    st.markdown('<span class="badge-ok">Model loaded</span>', unsafe_allow_html=True)
+else:
+    st.markdown('<span class="badge-err">Model not loaded</span>', unsafe_allow_html=True)
+
 # =========================
-# Video analysis
+# Video analysis (defaults; no UI knobs)
 # =========================
 def analyze_video(
     video_path,
@@ -352,26 +384,16 @@ def analyze_video(
     df_events = pd.DataFrame(events_rows[1:], columns=events_rows[0])
     return df_frames, df_events, playable_path
 
-def analyze_image_cnn_only(image_bgr, model, cnn_threshold=0.5):
-    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
-    x = preprocess_for_cnn(gray)
-    p = float(model.predict(x, verbose=0)[0][0])
-    y = 1 if p >= cnn_threshold else 0
-    return p, y
-
-def overlay_heads_on_image(image_bgr, min_frac, max_frac, min_circ, min_iner):
-    H, W = image_bgr.shape[:2]
-    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
-    detector = build_blob_detector(W, H, min_frac, max_frac, min_circ, min_iner)
-    head_pts = detect_heads_gray(gray, detector)
-    vis = image_bgr.copy()
-    for (cx, cy) in head_pts:
-        cv2.circle(vis, (int(cx), int(cy)), 4, (255,255,0), -1)
-    return vis, len(head_pts)
-
 # =========================
-# Results renderer (persists across reruns)
+# UI actions (VIDEO ONLY)
 # =========================
+uploaded = st.file_uploader(
+    "Upload a crowd video (MP4/MOV/MKV/AVI/MPEG4)",
+    type=["mp4","mov","mkv","avi","mpeg4"]
+)
+go = st.button("Analyze", type="primary")
+
+# Re-render previous results so downloads don't reset
 def render_results(res):
     df_frames = res["df_frames"]
     df_events = res["df_events"]
@@ -415,23 +437,11 @@ def render_results(res):
     else:
         st.info("Preview unavailable.")
 
-    if st.button("Clear results", key="clear_results"):
+    if st.button("Clear results"):
         st.session_state.pop("video_results", None)
         st.rerun()
 
-# =========================
-# UI actions
-# =========================
-uploader_key = "vid_upl" if input_mode == "Video" else "img_upl"
-uploaded = st.file_uploader(
-    "Upload a crowd video" if input_mode == "Video" else "Upload a crowd image",
-    type=(["mp4","mov","mkv","avi"] if input_mode == "Video" else ["jpg","jpeg","png","bmp","tif","tiff"]),
-    key=uploader_key
-)
-go = st.button("Analyze", key="analyze_btn")
-
-# Re-render previous results so downloads don't "reset" the page
-if input_mode == "Video" and "video_results" in st.session_state:
+if "video_results" in st.session_state:
     render_results(st.session_state["video_results"])
 
 if go:
@@ -440,52 +450,32 @@ if go:
     elif not cnn_model:
         st.error("Provide a valid model path or URL to your .h5.")
     elif not uploaded:
-        st.warning("Please upload a file.")
+        st.warning("Please upload a video.")
     else:
-        if input_mode == "Video":
-            tmp_in = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded.name)[1])
-            tmp_in.write(uploaded.read()); tmp_in.close()
+        tmp_in = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded.name)[1])
+        tmp_in.write(uploaded.read()); tmp_in.close()
 
-            with st.spinner("Analyzing video…"):
-                df_frames, df_events, labeled_path = analyze_video(
-                    tmp_in.name, cnn_model,
-                    target_fps=target_fps if target_fps and target_fps > 0 else None,
-                    cnn_threshold=cnn_threshold,
-                    abs_drop=abs_drop, rel_drop=rel_drop, min_event_sec=min_event_sec,
-                    combine_rule=combine_rule, min_frac=min_frac, max_frac=max_frac,
-                    min_circ=min_circ, min_iner=min_iner, draw_links=draw_links
-                )
+        # Fixed defaults (no UI knobs)
+        with st.spinner("Analyzing video…"):
+            df_frames, df_events, labeled_path = analyze_video(
+                tmp_in.name,
+                cnn_model,
+                target_fps=None,          # all frames
+                cnn_threshold=0.50,
+                abs_drop=2,
+                rel_drop=0.20,
+                min_event_sec=1.0,
+                combine_rule="and",
+                min_frac=0.00005,
+                max_frac=0.0020,
+                min_circ=0.20,
+                min_iner=0.10,
+                draw_links=True
+            )
 
-            st.session_state["video_results"] = {
-                "df_frames": df_frames,
-                "df_events": df_events,
-                "labeled_path": labeled_path,
-            }
-            render_results(st.session_state["video_results"])
-
-        else:  # Image
-            file_bytes = np.asarray(bytearray(uploaded.read()), dtype=np.uint8)
-            image_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-            if image_bgr is None:
-                st.error("Could not read the uploaded image.")
-            else:
-                with st.spinner("Analyzing image…"):
-                    prob, label = analyze_image_cnn_only(image_bgr, cnn_model, cnn_threshold=cnn_threshold)
-                lbl_text = "Stampede" if label == 1 else "No Stampede"
-                st.subheader("Results — Image")
-                st.write(f"**Prediction:** {lbl_text}  |  **p_cnn:** {prob:.3f}")
-
-                if draw_blobs_on_image:
-                    vis_bgr, head_count = overlay_heads_on_image(image_bgr, min_frac, max_frac, min_circ, min_iner)
-                    banner_h = max(40, image_bgr.shape[0]//14)
-                    color = (0,0,255) if label==1 else (0,180,0)
-                    cv2.rectangle(vis_bgr, (0,0), (image_bgr.shape[1], banner_h), color, -1)
-                    txt = f"heads~{head_count}  p_cnn={prob:.2f} (τ={cnn_threshold:.2f})  label={lbl_text}"
-                    cv2.putText(vis_bgr, txt, (12, banner_h-12), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255,255,255), 2, cv2.LINE_AA)
-                    st.image(cv2.cvtColor(vis_bgr, cv2.COLOR_BGR2RGB), caption=lbl_text, use_column_width=True)
-                    ok, buf = cv2.imencode(".png", vis_bgr)
-                    if ok:
-                        st.download_button("⬇️ Download labeled.png", data=buf.tobytes(),
-                                           file_name="labeled.png", mime="image/png", key="dl_image")
-                else:
-                    st.image(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB), caption=lbl_text, use_column_width=True)
+        st.session_state["video_results"] = {
+            "df_frames": df_frames,
+            "df_events": df_events,
+            "labeled_path": labeled_path,
+        }
+        render_results(st.session_state["video_results"])
