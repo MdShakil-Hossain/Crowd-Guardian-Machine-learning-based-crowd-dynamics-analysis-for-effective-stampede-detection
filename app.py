@@ -1,3 +1,7 @@
+@st.cache_resource(show_spinner=False)
+def load_cnn(path):
+    import tensorflow as tf
+    return tf.keras.models.load_model(path, compile=False)
 # app.py — Crowd Guardian (Video + Image) — session_state + stable H.264 preview
 
 import os
@@ -435,3 +439,4 @@ if go:
                                            file_name="labeled.png", mime="image/png", key="dl_image")
                 else:
                     st.image(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB), caption=lbl_text, use_column_width=True)
+
