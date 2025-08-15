@@ -1,17 +1,17 @@
+# --- Core app ---
 streamlit==1.36.0
-opencv-python
-numpy
-pandas
-tqdm
-scipy
-tensorflow==2.16.1
-streamlit==1.36.0
-opencv-python
-numpy
-pandas
-tqdm
-scipy
-tensorflow==2.16.1
-# Optional (only needed if you pick AVI and want the MP4 preview):
-moviepy
-imageio-ffmpeg
+
+# --- CV / Math stack ---
+opencv-python==4.12.0.88
+numpy>=1.26
+pandas>=2.2
+scipy>=1.11
+tqdm>=4.66
+
+# --- Deep learning ---
+tensorflow==2.16.1   # requires Python 3.12 on Streamlit Cloud
+h5py>=3.10           # for loading .h5 models
+
+# --- Video I/O helpers (for MP4 preview fallback) ---
+imageio-ffmpeg>=0.5.1
+moviepy>=1.0.3
