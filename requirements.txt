@@ -3,14 +3,22 @@ streamlit==1.36.0
 
 # --- CV / Math stack ---
 opencv-python==4.12.0.88
-numpy>=1.26
-pandas>=2.2
-scipy>=1.11
+pandas>=2.2,<3
+scipy>=1.11,<2
 tqdm>=4.66
 
+# Use NumPy appropriate for the TF branch
+numpy>=1.26,<2.0 ; python_version < "3.13"
+numpy>=2.0       ; python_version >= "3.13"
+
 # --- Deep learning ---
-tensorflow==2.16.1   # requires Python 3.12 on Streamlit Cloud
-h5py>=3.10           # for loading .h5 models
+# If Python < 3.13, stay on TF 2.16.x (needs NumPy < 2.0)
+tensorflow==2.16.1        ; python_version < "3.13"
+h5py>=3.10                ; python_version < "3.13"
+
+# If Python >= 3.13, use TF 2.20 (CPU build is smaller, no GPU on Streamlit Cloud)
+tensorflow-cpu==2.20.0    ; python_version >= "3.13"
+h5py>=3.11                ; python_version >= "3.13"
 
 # --- Video I/O helpers (for MP4 preview fallback) ---
 imageio-ffmpeg>=0.5.1
