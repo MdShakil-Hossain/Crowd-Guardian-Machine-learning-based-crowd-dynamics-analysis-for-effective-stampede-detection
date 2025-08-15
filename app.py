@@ -1,4 +1,4 @@
-# app.py — Crowd Guardian (Video only) — silent model load + modern minimal UI
+# app.py — Crowd Guardian (Video only) — centered & polished UI, silent model load
 
 import os
 import cv2
@@ -16,20 +16,15 @@ from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import urllib.request, hashlib
 
 # =============================================================================
-# Configuration (no UI controls shown)
+# App config (no visible settings)
 # =============================================================================
-APP_DIR = Path(__file__).resolve().parent
-CACHE_DIR = APP_DIR / "models"
-CACHE_DIR.mkdir(exist_ok=True)
-
-# Your model URL (override with Streamlit Secret MODEL_URL if you like)
-DEFAULT_MODEL_URL = (
-    "https://www.dropbox.com/scl/fi/zswpw1ucbj7bkkkykc8oc/deep_cnn_stampede.h5"
-    "?rlkey=e863b9skyvpyn0dn4gbwxd71s&st=uvgqjq7q&dl=1"
+st.set_page_config(
+    page_title="Crowd Guardian: Machine learning based crowd dynamics analysis for effective stampede detection",
+    layout="wide",
+    initial_sidebar_state="collapsed",
 )
-MODEL_URL = st.secrets.get("MODEL_URL", DEFAULT_MODEL_URL)
 
-# Fixed inference defaults (tuned; no sidebar)
+# ---- Fixed inference defaults ----
 CNN_THRESHOLD = 0.50
 ABS_DROP      = 2
 REL_DROP      = 0.20
@@ -40,73 +35,78 @@ MAX_FRAC      = 0.0020
 MIN_CIRC      = 0.20
 MIN_INER      = 0.10
 DRAW_LINKS    = True
-TARGET_FPS    = None  # None = use every frame
+TARGET_FPS    = None  # None = every frame
 
-# =============================================================================
-# Page & Styling
-# =============================================================================
-st.set_page_config(
-    page_title="Crowd Guardian: Machine learning based crowd dynamics analysis for effective stampede detection",
-    layout="wide",
-    initial_sidebar_state="collapsed",
+# ---- Model location ----
+APP_DIR = Path(__file__).resolve().parent
+CACHE_DIR = APP_DIR / "models"; CACHE_DIR.mkdir(exist_ok=True)
+DEFAULT_MODEL_URL = (
+    "https://www.dropbox.com/scl/fi/zswpw1ucbj7bkkkykc8oc/deep_cnn_stampede.h5"
+    "?rlkey=e863b9skyvpyn0dn4gbwxd71s&st=uvgqjq7q&dl=1"
 )
+MODEL_URL = st.secrets.get("MODEL_URL", DEFAULT_MODEL_URL)
 
+# =============================================================================
+# Style — centered grid + consistent cards/buttons
+# =============================================================================
 st.markdown(
     """
     <style>
-      /* Container width & spacing */
-      .main .block-container {max-width: 1100px; padding-top: 1.25rem; padding-bottom: 2.5rem;}
+      /* Center everything inside a fixed grid */
+      .main .block-container {max-width: 880px; padding-top: 1.2rem; padding-bottom: 2.5rem;}
 
-      /* Cards */
+      /* Hero card */
+      .cg-hero {
+        padding: 18px 22px;
+        border-radius: 16px;
+        border: 1px solid rgba(148,163,184,.18);
+        background:
+          radial-gradient(900px 300px at 0% -10%, rgba(59,130,246,.16), transparent),
+          linear-gradient(180deg, rgba(17,24,39,.55), rgba(2,6,23,.45));
+      }
+      .cg-title   {font-size: 1.32rem; margin: 0 0 .25rem 0; letter-spacing:.2px;}
+      .cg-subtle  {opacity:.85; margin:0}
+
+      /* Generic card */
       .cg-card {
         border: 1px solid rgba(148,163,184,.18);
-        border-radius: 16px;
-        padding: 16px 18px;
-        background: linear-gradient(180deg, rgba(17,24,39,.45), rgba(2,6,23,.35));
+        border-radius: 14px;
+        padding: 14px 16px;
+        background: rgba(15,23,42,.35);
       }
 
-      /* Header */
-      .cg-header {padding: 14px 18px 12px 18px; border-radius: 16px;
-        background: radial-gradient(900px 300px at 8% -10%, rgba(59,130,246,.18), transparent),
-                    linear-gradient(180deg, rgba(30,41,59,.45), rgba(2,6,23,.35));
-        border: 1px solid rgba(148,163,184,.18);
+      /* Status pills */
+      .pill {display:inline-block; padding:2px 10px; border-radius:999px; font-size:12px; margin-top:.6rem;
+             border:1px solid rgba(148,163,184,.35); background: rgba(30,41,59,.45)}
+      .ok   {background: rgba(16,185,129,.18); color:#a7f3d0; border-color: rgba(16,185,129,.35)}
+      .err  {background: rgba(239,68,68,.18); color:#fecaca; border-color: rgba(239,68,68,.35)}
+
+      /* File uploader wrapper */
+      .cg-upload {border: 1px dashed rgba(148,163,184,.35); border-radius: 12px; padding: 10px 12px;}
+
+      /* Primary action button */
+      .stButton>button {
+        width: 100%;
+        padding: 10px 14px;
+        border-radius: 10px;
+        font-weight: 600;
+        border: 0;
+        background: linear-gradient(90deg, #ef4444, #f97316);
       }
-      .cg-title {font-size: 1.35rem; margin: 0 0 .25rem 0; letter-spacing:.2px;}
-      .cg-sub   {opacity:.85; margin:0}
-
-      /* Pills */
-      .pill {display:inline-block; padding:2px 10px; border-radius: 999px; font-size:12px; margin-right:6px;
-             border:1px solid rgba(148,163,184,.35); background: rgba(30,41,59,.5)}
-      .ok    {background: rgba(16,185,129,.18); color:#a7f3d0; border-color: rgba(16,185,129,.35)}
-      .warn  {background: rgba(234,179,8,.18);  color:#fde68a; border-color: rgba(234,179,8,.35)}
-      .err   {background: rgba(239,68,68,.18);  color:#fecaca; border-color: rgba(239,68,68,.35)}
-
-      /* Upload card edges */
-      .upload-area {border: 1px dashed rgba(148,163,184,.35); border-radius: 14px; padding: 10px 12px; background: rgba(15,23,42,.35);}
+      .stButton>button:hover {filter: brightness(1.06)}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# Header
-st.markdown(
-    '<div class="cg-header">'
-    '<div class="cg-title">Crowd Guardian</div>'
-    '<div class="cg-sub">Machine learning based crowd dynamics analysis for effective stampede detection</div>'
-    '</div>',
-    unsafe_allow_html=True,
-)
-
 # =============================================================================
-# Utilities
+# Small helpers
 # =============================================================================
 def _normalize_dropbox(url: str) -> str:
     if "dropbox.com" not in url:
         return url
-    parts = urlparse(url)
-    q = parse_qs(parts.query)
-    q["dl"] = ["1"]
-    return urlunparse(parts._replace(query=urlencode({k: v[0] for k, v in q.items()})))
+    parts = urlparse(url); q = parse_qs(parts.query); q["dl"] = ["1"]
+    return urlunparse(parts._replace(query=urlencode({k:v[0] for k,v in q.items()})))
 
 def _download_to_cache(url: str) -> str:
     url = _normalize_dropbox(url)
@@ -134,8 +134,7 @@ def sec_to_tc(sec: float) -> str:
 def build_blob_detector(frame_w, frame_h, min_frac=MIN_FRAC, max_frac=MAX_FRAC,
                         min_circ=MIN_CIRC, min_inertia=MIN_INER, thresh_step=10):
     area = float(frame_w * frame_h)
-    minArea = max(5.0, min_frac * area)
-    maxArea = max(minArea + 1.0, max_frac * area)
+    minArea = max(5.0, min_frac * area); maxArea = max(minArea + 1.0, max_frac * area)
     p = cv2.SimpleBlobDetector_Params()
     p.minThreshold, p.maxThreshold, p.thresholdStep = 10, 220, thresh_step
     p.filterByArea, p.minArea, p.maxArea = True, minArea, maxArea
@@ -171,14 +170,13 @@ def combine_labels(y_heads, y_cnn, rule=COMBINE_RULE):
     rule = (rule or "and").lower()
     if rule == "and": return 1 if (y_heads and y_cnn) else 0
     if rule == "or":  return 1 if (y_heads or  y_cnn) else 0
-    if rule == "cnn_only": return int(y_cnn)
+    if rule == "cnn_only":   return int(y_cnn)
     if rule == "heads_only": return int(y_heads)
     return int(y_heads)
 
 def _get_ffmpeg_exe():
     ff = shutil.which("ffmpeg")
-    if ff:
-        return ff
+    if ff: return ff
     try:
         from imageio_ffmpeg import get_ffmpeg_exe
         return get_ffmpeg_exe()
@@ -187,23 +185,31 @@ def _get_ffmpeg_exe():
 
 def transcode_to_h264(src_path: str, dst_path: str, fps: float):
     ff = _get_ffmpeg_exe()
-    if ff is None:
-        return src_path, False, "ffmpeg not found"
+    if ff is None: return src_path, False, "ffmpeg not found"
     os.makedirs(os.path.dirname(dst_path), exist_ok=True)
-    cmd = [ff, "-y", "-loglevel", "error", "-i", src_path, "-r", str(int(round(fps if fps and fps > 0 else 25))),
+    cmd = [ff, "-y", "-loglevel", "error", "-i", src_path,
+           "-r", str(int(round(fps if fps and fps > 0 else 25))),
            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", dst_path]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     ok = (proc.returncode == 0) and os.path.exists(dst_path) and os.path.getsize(dst_path) > 0
     return (dst_path if ok else src_path), ok, (proc.stderr or "")
 
 # =============================================================================
-# Load model silently
+# Load model (silent)
 # =============================================================================
 model, load_err = None, None
 try:
     model = load_cnn(MODEL_URL)
 except Exception as e:
     load_err = str(e)
+
+# =============================================================================
+# HERO + STATUS (centered)
+# =============================================================================
+st.markdown('<div class="cg-hero">'
+            '<div class="cg-title">Crowd Guardian</div>'
+            '<div class="cg-subtle">Machine learning based crowd dynamics analysis for effective stampede detection</div>'
+            '</div>', unsafe_allow_html=True)
 
 st.markdown(
     f'<span class="pill {"ok" if model and not load_err else "err"}">'
@@ -214,17 +220,17 @@ if load_err:
     st.caption(load_err)
 
 # =============================================================================
-# Upload + Action
+# Upload (centered)
 # =============================================================================
 st.markdown("### Upload a crowd video")
-st.markdown('<div class="cg-card upload-area">', unsafe_allow_html=True)
+st.markdown('<div class="cg-card cg-upload">', unsafe_allow_html=True)
 uploaded = st.file_uploader(
     "Drag & drop a video (MP4, MOV, MKV, AVI, MPEG4) or browse",
     type=["mp4","mov","mkv","avi","mpeg4"],
     label_visibility="collapsed",
 )
 st.markdown("</div>", unsafe_allow_html=True)
-go = st.button("Analyze", type="primary", use_container_width=True)
+go = st.button("Analyze")
 
 # =============================================================================
 # Core analysis
@@ -263,7 +269,7 @@ def analyze_video(
 
     out_dir = os.path.join(os.getcwd(), "outputs")
     os.makedirs(out_dir, exist_ok=True)
-    base = os.path.splitext(os.path.basename(video_path))[0]
+    base  = os.path.splitext(os.path.basename(video_path))[0]
     stamp = time.strftime("%Y%m%d-%H%M%S")
     raw_path = os.path.join(out_dir, f"{base}_{stamp}_raw.avi")
     mp4_path = os.path.join(out_dir, f"{base}_{stamp}_labeled.mp4")
@@ -275,18 +281,16 @@ def analyze_video(
     in_event, start_f, start_t = False, None, None
     min_event_frames = max(1, int(round(min_event_sec * (fps/step))))
 
-    prog = st.progress(0.0)
-    status = st.empty()
-    processed = 0
-    total_steps = (N // step + 1) if N > 0 else 0
+    prog = st.progress(0.0); status = st.empty()
+    processed = 0; total_steps = (N // step + 1) if N > 0 else 0
 
     f = 0
     while True:
         ok, frame_bgr = cap.read()
-        if not ok:
-            break
+        if not ok: break
         if f % step == 0:
             gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+
             head_pts = detect_heads_gray(gray, detector)
             curr_count = len(head_pts)
             matches, _, _ = assign_matches(prev_pts, head_pts, max_match_dist)
@@ -303,8 +307,8 @@ def analyze_video(
             y_cnn = 1 if p_cnn >= cnn_threshold else 0
             final_label = combine_labels(y_heads, y_cnn, combine_rule)
 
-            t = f / fps
-            frames_rows.append((f, f"{t:.3f}", sec_to_tc(t), curr_count, delta,
+            t = f / fps; tc = sec_to_tc(t)
+            frames_rows.append((f, f"{t:.3f}", tc, curr_count, delta,
                                 f"{p_cnn:.6f}", y_cnn, y_heads, final_label))
 
             if final_label == 1 and not in_event:
@@ -317,7 +321,7 @@ def analyze_video(
                                         sec_to_tc(start_t), sec_to_tc(end_t), f"{(end_t-start_t):.3f}"))
                 in_event, start_f, start_t = False, None, None
 
-            # overlay & write
+            # overlay
             vis = frame_bgr.copy()
             for (cx, cy) in head_pts:
                 cv2.circle(vis, (int(cx), int(cy)), 4, (255,255,0), -1)
@@ -329,17 +333,14 @@ def analyze_video(
             banner_h = max(40, H//14)
             color = (0,0,255) if final_label==1 else (0,180,0)
             cv2.rectangle(vis, (0,0), (W, banner_h), color, -1)
-            cv2.putText(
-                vis,
-                f"heads={curr_count}  Δ={delta:+d}  p_cnn={p_cnn:.2f} (τ={cnn_threshold:.2f})  "
-                f"rule={combine_rule}  label={'Stampede' if final_label==1 else 'No Stampede'}  t={sec_to_tc(t)}",
-                (12, banner_h-12), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255,255,255), 2, cv2.LINE_AA
-            )
+            txt = (f"heads={curr_count}  Δ={delta:+d}  "
+                   f"p_cnn={p_cnn:.2f} (τ={cnn_threshold:.2f})  "
+                   f"rule={combine_rule}  label={'Stampede' if final_label==1 else 'No Stampede'}  t={tc}")
+            cv2.putText(vis, txt, (12, banner_h-12), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255,255,255), 2, cv2.LINE_AA)
 
-            if out.isOpened():
-                out.write(vis)
-
+            if out.isOpened(): out.write(vis)
             prev_pts, prev_count = head_pts, curr_count
+
             processed += 1
             if total_steps:
                 prog.progress(min(1.0, processed/total_steps))
@@ -352,32 +353,26 @@ def analyze_video(
                             sec_to_tc(start_t), sec_to_tc(end_t), f"{(end_t-start_t):.3f}"))
 
     cap.release()
-    if out.isOpened():
-        out.release()
+    if out.isOpened(): out.release()
 
     playable_path, ok, _ = transcode_to_h264(raw_path, mp4_path, fps)
-    if not ok:
-        st.warning("Transcode failed; preview may not play.")
+    if not ok: st.warning("Transcode failed; preview may not play.")
 
     prog.progress(1.0); status.write("Done.")
-    return (
-        pd.DataFrame(frames_rows[1:], columns=frames_rows[0]),
-        pd.DataFrame(events_rows[1:], columns=events_rows[0]),
-        playable_path,
-    )
+    df_frames = pd.DataFrame(frames_rows[1:], columns=frames_rows[0])
+    df_events = pd.DataFrame(events_rows[1:], columns=events_rows[0])
+    return df_frames, df_events, playable_path
 
 def render_results(df_frames, df_events, labeled_path):
     st.markdown("### Results")
-    # Summary card
-    with st.container():
-        c1, c2, c3 = st.columns(3)
-        total_events = int(len(df_events))
-        total_dur = float(df_events["duration_sec"].astype(float).sum()) if not df_events.empty else 0.0
-        longest = float(df_events["duration_sec"].astype(float).max()) if not df_events.empty else 0.0
-        c1.metric("Events", total_events)
-        c2.metric("Total Duration (s)", f"{total_dur:.2f}")
-        c3.metric("Longest Event (s)", f"{longest:.2f}")
-        st.markdown('<span class="pill ok">Complete</span>' if total_events==0 else '<span class="pill warn">Stampede detected</span>', unsafe_allow_html=True)
+    # Compact KPIs (aligned)
+    c1, c2, c3 = st.columns(3)
+    total_events = int(len(df_events))
+    total_dur = float(df_events["duration_sec"].astype(float).sum()) if not df_events.empty else 0.0
+    longest = float(df_events["duration_sec"].astype(float).max()) if not df_events.empty else 0.0
+    c1.metric("Events", total_events)
+    c2.metric("Total Duration (s)", f"{total_dur:.2f}")
+    c3.metric("Longest Event (s)", f"{longest:.2f}")
 
     st.markdown('<div class="cg-card">', unsafe_allow_html=True)
     if not df_events.empty:
@@ -406,10 +401,8 @@ def render_results(df_frames, df_events, labeled_path):
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.subheader("Labeled Video Preview")
-    if os.path.exists(labeled_path):
-        st.video(labeled_path)
-    else:
-        st.info("Preview unavailable.")
+    if os.path.exists(labeled_path): st.video(labeled_path)
+    else: st.info("Preview unavailable.")
 
 # =============================================================================
 # Drive
