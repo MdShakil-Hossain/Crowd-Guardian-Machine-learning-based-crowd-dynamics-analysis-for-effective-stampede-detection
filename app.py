@@ -11,6 +11,47 @@ import pandas as pd
 from scipy.optimize import linear_sum_assignment
 import streamlit as st
 
+# ---------- URL / path helpers for model loading ----------
+from pathlib import Path
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+import urllib.request, hashlib
+
+APP_DIR = Path(__file__).resolve().parent
+CACHE_DIR = APP_DIR / "models"
+CACHE_DIR.mkdir(exist_ok=True)
+
+def _normalize_dropbox(url: str) -> str:
+    """Ensure Dropbox URL is direct-download."""
+    if "dropbox.com" not in url:
+        return url
+    parts = urlparse(url)
+    q = parse_qs(parts.query)
+    q["dl"] = ["1"]
+    new_q = urlencode({k: v[0] for k, v in q.items()})
+    return urlunparse(parts._replace(query=new_q))
+
+def _download_to_cache(url: str) -> str:
+    url = _normalize_dropbox(url)
+    name = "model_" + hashlib.sha1(url.encode()).hexdigest() + ".h5"
+    dst = CACHE_DIR / name
+    if not dst.exists():
+        with st.spinner("Downloading model…"):
+            with urllib.request.urlopen(url) as r, open(dst, "wb") as f:
+                shutil.copyfileobj(r, f)
+    return str(dst)
+
+def _resolve_model_path(path_or_url: str) -> str:
+    p = (path_or_url or "").strip()
+    if p.startswith("http://") or p.startswith("https://"):
+        return _download_to_cache(p)
+    # local: try relative to app dir, then absolute
+    candidate = Path(p)
+    if not candidate.is_absolute():
+        candidate = APP_DIR / candidate
+    if not candidate.exists():
+        raise FileNotFoundError(f"Model not found at: {candidate}")
+    return str(candidate.resolve())
+
 # =========================
 # Streamlit UI config
 # =========================
@@ -82,7 +123,6 @@ def _get_ffmpeg_exe():
     if ff:
         return ff
     try:
-        # fallback to python-packaged ffmpeg (pip install imageio-ffmpeg)
         from imageio_ffmpeg import get_ffmpeg_exe
         return get_ffmpeg_exe()
     except Exception:
@@ -118,7 +158,21 @@ def transcode_to_h264(src_path: str, dst_path: str, fps: float):
 with st.sidebar:
     st.header("⚙️ Settings")
     input_mode = st.selectbox("Input Type", ["Video", "Image"], index=0)
-    model_path = st.text_input("Model (.h5) path", value="deep_cnn_stampede.h5")
+
+    # You can paste a local path (repo file) or a URL (e.g., Dropbox)
+    model_path = st.text_input(
+        "Model (.h5) path or URL",
+        value="https://www.dropbox.com/scl/fi/zswpw1ucbj7bkkkykc8oc/deep_cnn_stampede.h5"
+              "?rlkey=e863b9skyvpyn0dn4gbwxd71s&st=uvgqjq7q&dl=1"
+    )
+
+    # Optional: upload a .h5 directly at runtime
+    up = st.file_uploader("…or upload a .h5 file", type=["h5"], key="h5_upl")
+    if up is not None:
+        up_path = CACHE_DIR / "uploaded_model.h5"
+        up_path.write_bytes(up.read())
+        model_path = str(up_path)
+
     cnn_threshold = st.slider("CNN threshold (τ)", 0.0, 1.0, 0.50, 0.01)
 
     # Video-only
@@ -139,13 +193,13 @@ with st.sidebar:
     draw_blobs_on_image = st.checkbox("Draw head blobs on image (visual only)", value=True)
 
 # =========================
-# Model load
+# Model load (cached)
 # =========================
 @st.cache_resource(show_spinner=False)
-def load_cnn(path: str):
+def load_cnn(path_or_url: str):
     import tensorflow as tf
-    # With TF 2.20 / Keras 3, compile=False avoids legacy-object errors for .h5
-    return tf.keras.models.load_model(path, compile=False)
+    resolved = _resolve_model_path(path_or_url)
+    return tf.keras.models.load_model(resolved, compile=False)
 
 cnn_model, load_err = None, None
 if model_path:
@@ -384,7 +438,7 @@ if go:
     if load_err:
         st.error(f"Failed to load model: {load_err}")
     elif not cnn_model:
-        st.error("Provide a valid model path (point to your .h5).")
+        st.error("Provide a valid model path or URL to your .h5.")
     elif not uploaded:
         st.warning("Please upload a file.")
     else:
@@ -402,7 +456,6 @@ if go:
                     min_circ=min_circ, min_iner=min_iner, draw_links=draw_links
                 )
 
-            # Persist results so a rerun (e.g., download click) shows same state
             st.session_state["video_results"] = {
                 "df_frames": df_frames,
                 "df_events": df_events,
