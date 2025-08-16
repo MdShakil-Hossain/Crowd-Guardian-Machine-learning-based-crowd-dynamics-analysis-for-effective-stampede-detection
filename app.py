@@ -1,5 +1,5 @@
 # app.py — Crowd Guardian (Video only)
-# Polished UI: decorated sidebar, centered hero, event timeline, charts, silent model load
+# Professional UI: custom HTML/CSS, decorated sidebar, timeline, Altair charts, JS confetti
 
 import os
 import cv2
@@ -9,15 +9,17 @@ import subprocess
 import shutil
 import numpy as np
 import pandas as pd
-from scipy.optimize import linear_sum_assignment
 import streamlit as st
+import altair as alt
+from scipy.optimize import linear_sum_assignment
 
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import urllib.request, hashlib
+import streamlit.components.v1 as components
 
 # =============================================================================
-# App config
+# App config (sidebar visible)
 # =============================================================================
 st.set_page_config(
     page_title="Crowd Guardian: Machine learning based crowd dynamics analysis for effective stampede detection",
@@ -48,46 +50,62 @@ DEFAULT_MODEL_URL = (
 MODEL_URL = st.secrets.get("MODEL_URL", DEFAULT_MODEL_URL)
 
 # =============================================================================
-# Styles (centered layout, big title, decorated sidebar, timeline)
+# Global styles (HTML/CSS) — theme, hero, cards, sidebar, timeline
 # =============================================================================
 st.markdown(
     """
     <style>
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-      html, body, [class*="css"] { font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+      :root{
+        --bg:#0b1220; --panel:#0f172a; --panel2:#111827; --line:#1f2937;
+        --muted:rgba(148,163,184,.35); --muted2:rgba(148,163,184,.18);
+        --text:#e5e7eb; --accent:#ef4444; --accent2:#f97316; --good:#10b981; --bad:#ef4444;
+      }
+      html, body, [class*="css"] {
+        font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif !important;
+        color: var(--text);
+      }
+      .main .block-container {max-width: 1024px; padding-top: 0.8rem; padding-bottom: 2.0rem;}
+      body {background: radial-gradient(1200px 420px at -10% -15%, rgba(59,130,246,.14), transparent), var(--bg) !important;}
 
-      /* Main column width & spacing */
-      .main .block-container {max-width: 980px; padding-top: 1.0rem; padding-bottom: 2.0rem;}
+      /* Hide Streamlit chrome for a cleaner look */
+      header{visibility:hidden;}
+      [data-testid="stToolbar"]{display:none;}
+      #MainMenu{visibility:hidden;}
+      footer{visibility:hidden;}
 
       /* HERO */
       .cg-hero {
+        margin-top: 8px;
         padding: 26px 30px;
         border-radius: 18px;
-        border: 1px solid rgba(148,163,184,.18);
+        border: 1px solid var(--muted2);
         background:
           radial-gradient(1200px 420px at 0% -10%, rgba(59,130,246,.16), transparent),
           linear-gradient(180deg, rgba(17,24,39,.55), rgba(2,6,23,.45));
         text-align: center;
+        box-shadow: 0 10px 30px rgba(0,0,0,.25);
       }
-      .cg-title  {font-size: 2.35rem; line-height: 1.15; margin: 0 0 .35rem 0; letter-spacing:.2px;}
-      .cg-subtle {opacity:.92; margin:0; font-size: 1.05rem;}
+      .cg-title  {font-size: 2.45rem; line-height: 1.1; margin: 0 0 .35rem 0; letter-spacing:.2px;}
+      .cg-subtle {opacity:.92; margin:0; font-size: 1.06rem;}
 
       /* Section H2 (centered) */
-      .cg-h2 {text-align:center; margin: 1.1rem 0 .7rem 0; font-size:1.4rem;}
+      .cg-h2 {text-align:center; margin: 1.1rem 0 .7rem 0; font-size:1.35rem;}
 
       /* Cards */
       .cg-card {
-        border: 1px solid rgba(148,163,184,.18);
+        border: 1px solid var(--muted2);
         border-radius: 16px;
         padding: 14px 16px;
-        background: rgba(15,23,42,.35);
+        background: rgba(15,23,42,.45);
+        box-shadow: 0 10px 30px rgba(0,0,0,.25);
       }
-      .cg-upload {border: 1px dashed rgba(148,163,184,.35); border-radius: 12px; padding: 12px 12px;}
+      .cg-upload {border: 1px dashed var(--muted); border-radius: 12px; padding: 12px 12px;}
 
-      /* Status pill */
+      /* Pill */
       .cg-center {display:flex; justify-content:center; margin-top:.6rem;}
       .pill {display:inline-block; padding:3px 12px; border-radius:999px; font-size:12px;
-             border:1px solid rgba(148,163,184,.35); background: rgba(30,41,59,.45)}
+             border:1px solid var(--muted); background: rgba(30,41,59,.55)}
       .ok   {background: rgba(16,185,129,.18); color:#a7f3d0; border-color: rgba(16,185,129,.35)}
       .err  {background: rgba(239,68,68,.18); color:#fecaca; border-color: rgba(239,68,68,.35)}
 
@@ -98,20 +116,22 @@ st.markdown(
         border-radius: 12px;
         font-weight: 700;
         border: 0;
-        background: linear-gradient(90deg, #ef4444, #f97316);
+        color: #fff;
+        background: linear-gradient(90deg, var(--accent), var(--accent2));
+        box-shadow: 0 8px 24px rgba(249,115,22,.35);
       }
       .stButton>button:hover {filter: brightness(1.07)}
 
       /* -------------------- SIDEBAR DECOR -------------------- */
       [data-testid="stSidebar"] {
-        min-width: 320px; max-width: 340px;
-        border-right: 1px solid rgba(148,163,184,.15);
+        min-width: 320px; max-width: 360px;
+        border-right: 1px solid var(--muted2);
       }
       [data-testid="stSidebar"] > div:first-child {
-        background: linear-gradient(180deg, #0f172a 0%, #111827 60%, #1f2937 100%);
-        color: #e5e7eb;
+        background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 60%, #1f2937 100%);
+        color: var(--text);
       }
-      .sb-brand { font-weight: 700; font-size: 1.05rem; letter-spacing:.2px; margin: 10px 12px 4px 12px; }
+      .sb-brand { font-weight: 700; font-size: 1.08rem; letter-spacing:.2px; margin: 10px 12px 8px 12px; }
       .sb-card {
         border:1px solid rgba(255,255,255,.08);
         background: rgba(255,255,255,.04);
@@ -126,24 +146,27 @@ st.markdown(
       /* Timeline */
       .timeline-wrap {margin-top: .75rem; margin-bottom: .75rem;}
       .timeline {
-        --event: #ef4444;
+        --event: var(--accent);
         --track: rgba(148,163,184,.25);
         height: 14px;
         border-radius: 999px;
-        border: 1px solid rgba(148,163,184,.35);
+        border: 1px solid var(--muted);
         background: var(--track);
       }
       .timeline-legend {display:flex; gap:10px; align-items:center; font-size:12px; opacity:.9;}
-      .legend-swatch {width:14px; height:10px; border-radius:3px; display:inline-block; border:1px solid rgba(148,163,184,.35);}
-      .swatch-event {background:#ef4444;}
+      .legend-swatch {width:14px; height:10px; border-radius:3px; display:inline-block; border:1px solid var(--muted);}
+      .swatch-event {background:var(--accent);}
       .swatch-track {background:rgba(148,163,184,.25);}
+
+      /* Dataframe polish */
+      .stDataFrame {border-radius: 10px; overflow:hidden; border:1px solid var(--muted2);}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 # =============================================================================
-# Sidebar — PROJECT DETAILS
+# Sidebar — PROJECT DETAILS (no settings)
 # =============================================================================
 with st.sidebar:
     st.markdown('<div class="sb-brand">🛡️ Crowd Guardian</div>', unsafe_allow_html=True)
@@ -161,10 +184,10 @@ with st.sidebar:
         <div class="sb-card">
           <b>Method</b>
           <ul>
-            <li>Grayscale frames → detect head-like blobs (OpenCV SimpleBlobDetector).</li>
-            <li>Run CNN on 100×100 grayscale inputs (τ={CNN_THRESHOLD:.2f}).</li>
+            <li>Grayscale frames → head-like blobs (OpenCV SimpleBlobDetector).</li>
+            <li>CNN on 100×100 grayscale inputs (τ={CNN_THRESHOLD:.2f}).</li>
             <li>Head-drop: Δ≥{ABS_DROP} or {int(REL_DROP*100)}% vs. previous frame.</li>
-            <li>Decision rule: <code>{COMBINE_RULE}</code> (CNN &amp; head-drop).</li>
+            <li>Decision: <code>{COMBINE_RULE}</code> of CNN &amp; head-drop.</li>
             <li>Merge consecutive positives into events ≥ {MIN_EVENT_SEC:.1f}s.</li>
           </ul>
         </div>
@@ -205,7 +228,7 @@ st.markdown(
 )
 
 # =============================================================================
-# Helpers (ML)
+# Helpers (ML + I/O)
 # =============================================================================
 def _normalize_dropbox(url: str) -> str:
     if "dropbox.com" not in url: return url
@@ -359,7 +382,7 @@ def analyze_video(
     max_match_dist = max(15, int(0.03 * max(W, H)))
     detector = build_blob_detector(W, H, min_frac, max_frac, min_circ, min_iner)
 
-    # Use numeric types (not strings) so we can plot easily
+    # Use numeric types for plotting
     frames_rows = [("frame_index","time_sec","timecode","head_count","delta_vs_prev",
                     "prob_cnn","cnn_label","heads_label","final_label")]
     events_rows = [("start_frame","end_frame","start_time_sec","end_time_sec","start_tc","end_tc","duration_sec")]
@@ -460,7 +483,7 @@ def analyze_video(
     prog.progress(1.0); status.write("Done.")
     df_frames = pd.DataFrame(frames_rows[1:], columns=frames_rows[0])
     df_events = pd.DataFrame(events_rows[1:], columns=events_rows[0])
-    return df_frames, df_events, playable_path, fps
+    return df_frames, df_events, playable_path
 
 # ---- Build a CSS gradient timeline bar from events ----
 def make_timeline_gradient(total_sec: float, events_df: pd.DataFrame) -> str:
@@ -480,6 +503,7 @@ def make_timeline_gradient(total_sec: float, events_df: pd.DataFrame) -> str:
         stops.append(f"var(--track) {last_pct:.3f}%, var(--track) 100%")
     return "linear-gradient(90deg, " + ", ".join(stops) + ")"
 
+# ---- Render results with visuals ----
 def render_results(df_frames, df_events, labeled_path):
     st.markdown('<h2 class="cg-h2">Results</h2>', unsafe_allow_html=True)
 
@@ -491,6 +515,43 @@ def render_results(df_frames, df_events, labeled_path):
     c1.metric("Events", total_events)
     c2.metric("Total Duration (s)", f"{total_dur:.2f}")
     c3.metric("Longest Event (s)", f"{longest:.2f}")
+
+    # Confetti if we detected anything (JS in an iframe)
+    if total_events > 0:
+        components.html("""
+        <div id="confetti"></div>
+        <canvas id="c"></canvas>
+        <style>
+          #c{position:relative;width:100%;height:140px;display:block;border-radius:12px;margin:6px 0 4px 0;
+             background:linear-gradient(90deg, rgba(16,185,129,.18), rgba(239,68,68,.18));}
+        </style>
+        <script>
+          const canvas = document.getElementById('c');
+          const ctx = canvas.getContext('2d');
+          function resize(){canvas.width=canvas.clientWidth; canvas.height=140;}
+          window.addEventListener('resize', resize); resize();
+          const confetti = [];
+          function spawn(){for(let i=0;i<50;i++){confetti.push({
+            x: Math.random()*canvas.width, y: -10 - Math.random()*30,
+            vx: (Math.random()-0.5)*1.5, vy: 1+Math.random()*2.5,
+            s: 2+Math.random()*3, a: Math.random()*Math.PI
+          });}}
+          spawn();
+          function tick(){
+            ctx.clearRect(0,0,canvas.width,canvas.height);
+            confetti.forEach(p=>{
+              p.x+=p.vx; p.y+=p.vy; p.a+=0.1;
+              ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.a);
+              ctx.fillStyle = ['#ef4444','#f97316','#10b981','#60a5fa'][Math.floor(Math.random()*4)];
+              ctx.fillRect(-p.s/2, -p.s/2, p.s, p.s*2);
+              ctx.restore();
+            });
+            requestAnimationFrame(tick);
+          }
+          tick();
+          setTimeout(()=>{spawn()}, 600);
+        </script>
+        """, height=160)
 
     # Timeline bar
     st.markdown('<div class="cg-card">', unsafe_allow_html=True)
@@ -511,21 +572,29 @@ def render_results(df_frames, df_events, labeled_path):
     )
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Charts: probability & head count
+    # Charts: Altair (probability & head count)
     if not df_frames.empty:
+        base = alt.Chart(df_frames).properties(height=240)
         left, right = st.columns(2)
+
         with left:
             st.subheader("CNN Probability")
-            st.line_chart(
-                df_frames.set_index("frame_index")[["prob_cnn"]],
-                height=240
+            line_prob = base.mark_line().encode(
+                x=alt.X('frame_index:Q', title='Frame'),
+                y=alt.Y('prob_cnn:Q', title='Probability', scale=alt.Scale(domain=[0,1])),
+                tooltip=['frame_index','timecode','prob_cnn']
             )
+            thresh = base.mark_rule(strokeDash=[4,4]).encode(y=alt.datum(CNN_THRESHOLD))
+            st.altair_chart((line_prob + thresh).interactive(), use_container_width=True)
+
         with right:
             st.subheader("Estimated Head Count")
-            st.line_chart(
-                df_frames.set_index("frame_index")[["head_count"]],
-                height=240
+            line_head = base.mark_line().encode(
+                x=alt.X('frame_index:Q', title='Frame'),
+                y=alt.Y('head_count:Q', title='Head Count'),
+                tooltip=['frame_index','timecode','head_count','delta_vs_prev']
             )
+            st.altair_chart(line_head.interactive(), use_container_width=True)
 
     # Tables + downloads
     if not df_events.empty:
@@ -557,7 +626,7 @@ def render_results(df_frames, df_events, labeled_path):
     else: st.info("Preview unavailable.")
 
 # =============================================================================
-# Drive
+# Run
 # =============================================================================
 if go:
     if not model:
@@ -568,5 +637,5 @@ if go:
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded.name)[1])
         tmp.write(uploaded.read()); tmp.close()
         with st.spinner("Analyzing video…"):
-            df_frames, df_events, labeled_path, fps = analyze_video(tmp.name, model)
+            df_frames, df_events, labeled_path = analyze_video(tmp.name, model)
         render_results(df_frames, df_events, labeled_path)
