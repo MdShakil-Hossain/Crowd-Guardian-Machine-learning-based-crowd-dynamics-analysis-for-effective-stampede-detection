@@ -1,6 +1,7 @@
 # app.py — Crowd Guardian (Video only)
 # Premium UI: custom HTML/CSS, decorated sidebar, status banner (no timeline bar),
-# Altair charts, JS confetti, and animated particles/starfield background.
+# Altair charts, JS confetti, animated particles background, and
+# **session_state persistence** so downloads don't "refresh away" your results.
 
 import os
 import cv2
@@ -41,9 +42,6 @@ MIN_INER      = 0.10
 DRAW_LINKS    = True
 TARGET_FPS    = None  # None = use every frame
 
-# ---------- Toggle: show timeline bar? ----------
-SHOW_TIMELINE = False  # <— removed the grey timeline bar
-
 # ---------- Model location ----------
 APP_DIR = Path(__file__).resolve().parent
 CACHE_DIR = APP_DIR / "models"; CACHE_DIR.mkdir(exist_ok=True)
@@ -76,11 +74,8 @@ st.markdown(
           radial-gradient(1000px 420px at 110% -20%, rgba(236,72,153,.14), transparent),
           var(--bg) !important;
       }
-
-      /* Hide extra chrome */
       header{visibility:hidden;} [data-testid="stToolbar"]{display:none;} #MainMenu{visibility:hidden;} footer{visibility:hidden;}
 
-      /* HERO */
       .cg-hero {
         margin-top: 8px; padding: 30px 32px; border-radius: 20px;
         border: 1px solid var(--muted2);
@@ -92,21 +87,16 @@ st.markdown(
       .cg-title  {font-size: 2.75rem; line-height: 1.08; margin: 0 0 .35rem 0; letter-spacing:.1px;}
       .cg-subtle {opacity:.95; margin:0; font-size: 1.08rem;}
 
-      /* Section H2 (centered) */
       .cg-h2 {text-align:center; margin: 1.1rem 0 .7rem 0; font-size:1.35rem;}
-
-      /* Cards */
       .cg-card {border: 1px solid var(--muted2); border-radius: 16px; padding: 14px 16px;
                 background: rgba(15,23,42,.45); box-shadow: 0 10px 30px rgba(0,0,0,.25);}
 
-      /* Pill */
       .cg-center {display:flex; justify-content:center; margin-top:.6rem;}
       .pill {display:inline-block; padding:3px 12px; border-radius:999px; font-size:12px;
              border:1px solid var(--muted); background: rgba(30,41,59,.55)}
       .ok   {background: rgba(16,185,129,.18); color:#a7f3d0; border-color: rgba(16,185,129,.35)}
       .err  {background: rgba(239,68,68,.18); color:#fecaca; border-color: rgba(239,68,68,.35)}
 
-      /* Primary button */
       .stButton>button {
         width: 100%; padding: 12px 14px; border-radius: 12px; font-weight: 700; border: 0; color: #fff;
         background: linear-gradient(90deg, var(--accent), var(--accent2));
@@ -114,7 +104,6 @@ st.markdown(
       }
       .stButton>button:hover {filter: brightness(1.07)}
 
-      /* -------------------- SIDEBAR DECOR -------------------- */
       [data-testid="stSidebar"] {min-width: 330px; max-width: 360px; border-right: 1px solid var(--muted2);}
       [data-testid="stSidebar"] > div:first-child {
         background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 60%, #182234 100%); color: var(--text);
@@ -127,7 +116,6 @@ st.markdown(
       .sb-card ul, .sb-card ol {padding-left: 1.05rem; margin: .25rem 0 0 0;}
       .sb-card li {margin-bottom: 6px;}
 
-      /* CAPSTONE GRID */
       .capstone-badge {
         display:inline-flex; align-items:center; gap:8px; margin-bottom:10px;
         background: linear-gradient(90deg, rgba(239,68,68,.18), rgba(249,115,22,.18));
@@ -142,7 +130,6 @@ st.markdown(
       .cap-id {opacity:.85;}
       .divider {height:1px; background:rgba(255,255,255,.06); margin:10px 0;}
 
-      /* STATUS BANNER (timeline removed) */
       .status-banner{
         display:flex; align-items:center; justify-content:center;
         gap:10px; height:52px; border-radius:12px; margin:12px 0;
@@ -151,21 +138,11 @@ st.markdown(
         box-shadow: 0 6px 18px rgba(0,0,0,.25);
       }
       .status-dot{width:10px; height:10px; border-radius:50%; display:inline-block; box-shadow:0 0 0 3px rgba(255,255,255,.06) inset;}
-      .status-ok{
-        background: linear-gradient(90deg, rgba(239,68,68,.22), rgba(249,115,22,.22));
-        color:#ffe5d5;
-      }
-      .status-safe{
-        background: linear-gradient(90deg, rgba(16,185,129,.22), rgba(59,130,246,.22));
-        color:#dcfce7;
-      }
-      .status-ok .status-dot{background:#ef4444;}
-      .status-safe .status-dot{background:#10b981;}
+      .status-ok{  background: linear-gradient(90deg, rgba(239,68,68,.22), rgba(249,115,22,.22)); color:#ffe5d5; }
+      .status-safe{background: linear-gradient(90deg, rgba(16,185,129,.22), rgba(59,130,246,.22)); color:#dcfce7; }
+      .status-ok .status-dot{background:#ef4444;} .status-safe .status-dot{background:#10b981;}
 
-      /* Dataframe polish */
       .stDataFrame {border-radius: 10px; overflow:hidden; border:1px solid var(--muted2);}
-
-      /* Tighten the dropzone spacing */
       [data-testid="stFileUploadDropzone"]{ margin-top: 0 !important; }
     </style>
     """,
@@ -214,11 +191,10 @@ components.html("""
 """, height=0)
 
 # =============================================================================
-# Sidebar — PROJECT DETAILS (no settings)
+# Sidebar — PROJECT DETAILS
 # =============================================================================
 with st.sidebar:
     st.markdown('<div class="sb-brand">🛡️ Crowd Guardian</div>', unsafe_allow_html=True)
-
     st.markdown(
         """
         <div class="sb-card">
@@ -228,7 +204,6 @@ with st.sidebar:
         </div>
         """, unsafe_allow_html=True
     )
-
     st.markdown(
         """
         <div class="sb-card">
@@ -260,7 +235,6 @@ with st.sidebar:
         """,
         unsafe_allow_html=True
     )
-
     st.markdown(
         """
         <div class="sb-card">
@@ -273,7 +247,6 @@ with st.sidebar:
         </div>
         """, unsafe_allow_html=True
     )
-
     try:
         import tensorflow as tf
         tf_ver = tf.__version__
@@ -407,7 +380,131 @@ if load_err:
     st.caption(load_err)
 
 # =============================================================================
-# Upload (no wrapper)
+# (NEW) Re-render persisted results so downloads don't clear the page
+# =============================================================================
+def render_results(df_frames, df_events, labeled_path):
+    st.markdown('<h2 class="cg-h2">Results</h2>', unsafe_allow_html=True)
+
+    # KPIs
+    c1, c2, c3 = st.columns(3)
+    total_events = int(len(df_events))
+    total_dur = float(df_events["duration_sec"].sum()) if not df_events.empty else 0.0
+    longest = float(df_events["duration_sec"].max()) if not df_events.empty else 0.0
+    c1.metric("Events", total_events)
+    c2.metric("Total Duration (s)", f"{total_dur:.2f}")
+    c3.metric("Longest Event (s)", f"{longest:.2f}")
+
+    # Confetti if detected
+    if total_events > 0:
+        components.html("""
+        <canvas id="c"></canvas>
+        <style>
+          #c{position:relative;width:100%;height:140px;display:block;border-radius:12px;margin:6px 0 4px 0;
+             background:linear-gradient(90deg, rgba(16,185,129,.18), rgba(239,68,68,.18));}
+        </style>
+        <script>
+          const canvas = document.getElementById('c');
+          const ctx = canvas.getContext('2d');
+          function resize(){canvas.width=canvas.clientWidth; canvas.height=140;}
+          window.addEventListener('resize', resize); resize();
+          const confetti = [];
+          function spawn(){for(let i=0;i<50;i++){confetti.push({
+            x: Math.random()*canvas.width, y: -10 - Math.random()*30,
+            vx: (Math.random()-0.5)*1.5, vy: 1+Math.random()*2.5,
+            s: 2+Math.random()*3, a: Math.random()*Math.PI
+          });}}
+          spawn();
+          function tick(){
+            ctx.clearRect(0,0,canvas.width,canvas.height);
+            confetti.forEach(p=>{
+              p.x+=p.vx; p.y+=p.vy; p.a+=0.1;
+              ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.a);
+              ctx.fillStyle = ['#ef4444','#f97316','#10b981','#60a5fa'][Math.floor(Math.random()*4)];
+              ctx.fillRect(-p.s/2, -p.s/2, p.s, p.s*2);
+              ctx.restore();
+            });
+            requestAnimationFrame(tick);
+          }
+          tick();
+          setTimeout(()=>{spawn()}, 600);
+        </script>
+        """, height=160)
+
+    # Status banner (only)
+    st.markdown('<div class="cg-card">', unsafe_allow_html=True)
+    status_cls = "status-ok" if total_events > 0 else "status-safe"
+    status_text = "Stampede detected" if total_events > 0 else "No stampede detected"
+    st.markdown(
+        f'<div class="status-banner {status_cls}"><span class="status-dot"></span>{status_text}</div>',
+        unsafe_allow_html=True
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # Charts
+    if not df_frames.empty:
+        base = alt.Chart(df_frames).properties(height=240)
+        left, right = st.columns(2)
+
+        with left:
+            st.subheader("CNN Probability")
+            line_prob = base.mark_line().encode(
+                x=alt.X('frame_index:Q', title='Frame'),
+                y=alt.Y('prob_cnn:Q', title='Probability', scale=alt.Scale(domain=[0,1])),
+                tooltip=['frame_index','timecode','prob_cnn']
+            )
+            thresh = base.mark_rule(strokeDash=[4,4]).encode(y=alt.datum(CNN_THRESHOLD))
+            st.altair_chart((line_prob + thresh).interactive(), use_container_width=True)
+
+        with right:
+            st.subheader("Estimated Head Count")
+            line_head = base.mark_line().encode(
+                x=alt.X('frame_index:Q', title='Frame'),
+                y=alt.Y('head_count:Q', title='Head Count'),
+                tooltip=['frame_index','timecode','head_count','delta_vs_prev']
+            )
+            st.altair_chart(line_head.interactive(), use_container_width=True)
+
+    # Tables + downloads
+    if not df_events.empty:
+        st.subheader("Detected intervals")
+        st.dataframe(df_events, use_container_width=True)
+    else:
+        st.info("No stampede intervals found.")
+
+    st.subheader("Per-frame predictions")
+    st.dataframe(df_frames.head(1000), use_container_width=True)
+
+    # Stable keys so reruns don't duplicate widgets
+    uid = os.path.splitext(os.path.basename(labeled_path))[0] if labeled_path else "na"
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.download_button("⬇️ events.csv", df_events.to_csv(index=False).encode("utf-8"),
+                           file_name="events.csv", mime="text/csv",
+                           use_container_width=True, key=f"dl_events_{uid}")
+    with c2:
+        st.download_button("⬇️ frame_preds.csv", df_frames.to_csv(index=False).encode("utf-8"),
+                           file_name="frame_preds.csv", mime="text/csv",
+                           use_container_width=True, key=f"dl_frames_{uid}")
+    with c3:
+        if os.path.exists(labeled_path) and os.path.getsize(labeled_path) > 0:
+            with open(labeled_path, "rb") as fh:
+                st.download_button("⬇️ labeled.mp4", fh.read(), file_name=os.path.basename(labeled_path),
+                                   mime="video/mp4", use_container_width=True, key=f"dl_video_{uid}")
+        else:
+            st.button("Video unavailable", disabled=True, use_container_width=True, key=f"dl_na_{uid}")
+
+    st.markdown('<h2 class="cg-h2">Labeled Video Preview</h2>', unsafe_allow_html=True)
+    if os.path.exists(labeled_path): st.video(labeled_path)
+    else: st.info("Preview unavailable.")
+
+# ---- Re-render results from session on EVERY run (prevents ‘refresh’ loss)
+if "video_results" in st.session_state:
+    _res = st.session_state["video_results"]
+    render_results(_res["df_frames"], _res["df_events"], _res["labeled_path"])
+
+# =============================================================================
+# Upload
 # =============================================================================
 st.markdown('<h2 class="cg-h2">Upload a crowd video</h2>', unsafe_allow_html=True)
 uploaded = st.file_uploader(
@@ -550,133 +647,6 @@ def analyze_video(
     df_events = pd.DataFrame(events_rows[1:], columns=events_rows[0])
     return df_frames, df_events, playable_path
 
-# ---- (Optional) timeline gradient helper left here for later use
-def make_timeline_gradient(total_sec: float, events_df: pd.DataFrame) -> str:
-    if total_sec <= 0: return ""
-    stops, last_pct = [], 0.0
-    if not events_df.empty:
-        for _, r in events_df.iterrows():
-            s = float(r["start_time_sec"]); e = float(r["end_time_sec"])
-            s_pct = max(0.0, min(100.0, (s / total_sec) * 100.0))
-            e_pct = max(0.0, min(100.0, (e / total_sec) * 100.0))
-            if s_pct > last_pct: stops.append(f"var(--track) {last_pct:.3f}%, var(--track) {s_pct:.3f}%")
-            stops.append(f"var(--event) {s_pct:.3f}%, var(--event) {e_pct:.3f}%")
-            last_pct = e_pct
-    if last_pct < 100.0: stops.append(f"var(--track) {last_pct:.3f}%, var(--track) 100%")
-    return "linear-gradient(90deg, " + ", ".join(stops) + ")"
-
-# ---- Render results with visuals (no timeline bar)
-def render_results(df_frames, df_events, labeled_path):
-    st.markdown('<h2 class="cg-h2">Results</h2>', unsafe_allow_html=True)
-
-    # KPIs
-    c1, c2, c3 = st.columns(3)
-    total_events = int(len(df_events))
-    total_dur = float(df_events["duration_sec"].sum()) if not df_events.empty else 0.0
-    longest = float(df_events["duration_sec"].max()) if not df_events.empty else 0.0
-    c1.metric("Events", total_events)
-    c2.metric("Total Duration (s)", f"{total_dur:.2f}")
-    c3.metric("Longest Event (s)", f"{longest:.2f}")
-
-    # Confetti if detected
-    if total_events > 0:
-        components.html("""
-        <canvas id="c"></canvas>
-        <style>
-          #c{position:relative;width:100%;height:140px;display:block;border-radius:12px;margin:6px 0 4px 0;
-             background:linear-gradient(90deg, rgba(16,185,129,.18), rgba(239,68,68,.18));}
-        </style>
-        <script>
-          const canvas = document.getElementById('c');
-          const ctx = canvas.getContext('2d');
-          function resize(){canvas.width=canvas.clientWidth; canvas.height=140;}
-          window.addEventListener('resize', resize); resize();
-          const confetti = [];
-          function spawn(){for(let i=0;i<50;i++){confetti.push({
-            x: Math.random()*canvas.width, y: -10 - Math.random()*30,
-            vx: (Math.random()-0.5)*1.5, vy: 1+Math.random()*2.5,
-            s: 2+Math.random()*3, a: Math.random()*Math.PI
-          });}}
-          spawn();
-          function tick(){
-            ctx.clearRect(0,0,canvas.width,canvas.height);
-            confetti.forEach(p=>{
-              p.x+=p.vx; p.y+=p.vy; p.a+=0.1;
-              ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.a);
-              ctx.fillStyle = ['#ef4444','#f97316','#10b981','#60a5fa'][Math.floor(Math.random()*4)];
-              ctx.fillRect(-p.s/2, -p.s/2, p.s, p.s*2);
-              ctx.restore();
-            });
-            requestAnimationFrame(tick);
-          }
-          tick();
-          setTimeout(()=>{spawn()}, 600);
-        </script>
-        """, height=160)
-
-    # Status banner (only)
-    st.markdown('<div class="cg-card">', unsafe_allow_html=True)
-    status_cls = "status-ok" if total_events > 0 else "status-safe"
-    status_text = "Stampede detected" if total_events > 0 else "No stampede detected"
-    st.markdown(
-        f'<div class="status-banner {status_cls}"><span class="status-dot"></span>{status_text}</div>',
-        unsafe_allow_html=True
-    )
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    # Charts
-    if not df_frames.empty:
-        base = alt.Chart(df_frames).properties(height=240)
-        left, right = st.columns(2)
-
-        with left:
-            st.subheader("CNN Probability")
-            line_prob = base.mark_line().encode(
-                x=alt.X('frame_index:Q', title='Frame'),
-                y=alt.Y('prob_cnn:Q', title='Probability', scale=alt.Scale(domain=[0,1])),
-                tooltip=['frame_index','timecode','prob_cnn']
-            )
-            thresh = base.mark_rule(strokeDash=[4,4]).encode(y=alt.datum(CNN_THRESHOLD))
-            st.altair_chart((line_prob + thresh).interactive(), use_container_width=True)
-
-        with right:
-            st.subheader("Estimated Head Count")
-            line_head = base.mark_line().encode(
-                x=alt.X('frame_index:Q', title='Frame'),
-                y=alt.Y('head_count:Q', title='Head Count'),
-                tooltip=['frame_index','timecode','head_count','delta_vs_prev']
-            )
-            st.altair_chart(line_head.interactive(), use_container_width=True)
-
-    # Tables + downloads
-    if not df_events.empty:
-        st.subheader("Detected intervals")
-        st.dataframe(df_events, use_container_width=True)
-    else:
-        st.info("No stampede intervals found.")
-
-    st.subheader("Per-frame predictions")
-    st.dataframe(df_frames.head(1000), use_container_width=True)
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.download_button("⬇️ events.csv", df_events.to_csv(index=False).encode("utf-8"),
-                           file_name="events.csv", mime="text/csv", use_container_width=True)
-    with c2:
-        st.download_button("⬇️ frame_preds.csv", df_frames.to_csv(index=False).encode("utf-8"),
-                           file_name="frame_preds.csv", mime="text/csv", use_container_width=True)
-    with c3:
-        if os.path.exists(labeled_path) and os.path.getsize(labeled_path) > 0:
-            with open(labeled_path, "rb") as fh:
-                st.download_button("⬇️ labeled.mp4", fh.read(), file_name=os.path.basename(labeled_path),
-                                   mime="video/mp4", use_container_width=True)
-        else:
-            st.button("Video unavailable", disabled=True, use_container_width=True)
-
-    st.markdown('<h2 class="cg-h2">Labeled Video Preview</h2>', unsafe_allow_html=True)
-    if os.path.exists(labeled_path): st.video(labeled_path)
-    else: st.info("Preview unavailable.")
-
 # =============================================================================
 # Run
 # =============================================================================
@@ -690,4 +660,13 @@ if go:
         tmp.write(uploaded.read()); tmp.close()
         with st.spinner("Analyzing video…"):
             df_frames, df_events, labeled_path = analyze_video(tmp.name, model)
+
+        # -------- Persist results so any rerun (e.g., downloads) keeps the view --------
+        st.session_state["video_results"] = {
+            "df_frames": df_frames,
+            "df_events": df_events,
+            "labeled_path": labeled_path,
+        }
+
+        # Render now
         render_results(df_frames, df_events, labeled_path)
