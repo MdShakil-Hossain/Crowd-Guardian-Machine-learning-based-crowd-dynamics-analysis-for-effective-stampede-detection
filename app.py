@@ -1,6 +1,6 @@
 # app.py — Crowd Guardian (Video only)
-# Professional UI: custom HTML/CSS, decorated sidebar, timeline, Altair charts, JS confetti
-# Sidebar "Method" replaced with your Intro section.
+# Premium UI: custom HTML/CSS, decorated sidebar, timeline, Altair charts, JS confetti
+# Sidebar now shows a stylized Capstone-C details card (no "Intro" title).
 
 import os
 import cv2
@@ -20,7 +20,7 @@ import urllib.request, hashlib
 import streamlit.components.v1 as components
 
 # =============================================================================
-# App config (sidebar visible)
+# App config
 # =============================================================================
 st.set_page_config(
     page_title="Crowd Guardian: Machine learning based crowd dynamics analysis for effective stampede detection",
@@ -51,56 +51,50 @@ DEFAULT_MODEL_URL = (
 MODEL_URL = st.secrets.get("MODEL_URL", DEFAULT_MODEL_URL)
 
 # =============================================================================
-# Global styles (HTML/CSS) — theme, hero, cards, sidebar, timeline
+# Global styles (HTML/CSS)
 # =============================================================================
 st.markdown(
     """
     <style>
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
       :root{
-        --bg:#0b1220; --panel:#0f172a; --panel2:#111827; --line:#1f2937;
+        --bg:#0a0f1a; --panel:#0e1526; --panel2:#101826;
         --muted:rgba(148,163,184,.35); --muted2:rgba(148,163,184,.18);
-        --text:#e5e7eb; --accent:#ef4444; --accent2:#f97316; --good:#10b981; --bad:#ef4444;
+        --text:#e6e9ef; --accent:#ef4444; --accent2:#f97316;
       }
       html, body, [class*="css"] {
         font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif !important;
         color: var(--text);
       }
-      .main .block-container {max-width: 1024px; padding-top: 0.8rem; padding-bottom: 2.0rem;}
-      body {background: radial-gradient(1200px 420px at -10% -15%, rgba(59,130,246,.14), transparent), var(--bg) !important;}
+      .main .block-container {max-width: 1080px; padding-top: .6rem; padding-bottom: 2rem;}
+      body {
+        background:
+          radial-gradient(1000px 380px at -10% -15%, rgba(99,102,241,.16), transparent),
+          radial-gradient(1000px 420px at 110% -20%, rgba(236,72,153,.14), transparent),
+          var(--bg) !important;
+      }
 
-      /* Hide Streamlit chrome for a cleaner look */
-      header{visibility:hidden;}
-      [data-testid="stToolbar"]{display:none;}
-      #MainMenu{visibility:hidden;}
-      footer{visibility:hidden;}
+      /* Hide extra chrome */
+      header{visibility:hidden;} [data-testid="stToolbar"]{display:none;} #MainMenu{visibility:hidden;} footer{visibility:hidden;}
 
       /* HERO */
       .cg-hero {
-        margin-top: 8px;
-        padding: 26px 30px;
-        border-radius: 18px;
+        margin-top: 8px; padding: 30px 32px; border-radius: 20px;
         border: 1px solid var(--muted2);
         background:
           radial-gradient(1200px 420px at 0% -10%, rgba(59,130,246,.16), transparent),
           linear-gradient(180deg, rgba(17,24,39,.55), rgba(2,6,23,.45));
-        text-align: center;
-        box-shadow: 0 10px 30px rgba(0,0,0,.25);
+        text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,.25);
       }
-      .cg-title  {font-size: 2.45rem; line-height: 1.1; margin: 0 0 .35rem 0; letter-spacing:.2px;}
-      .cg-subtle {opacity:.92; margin:0; font-size: 1.06rem;}
+      .cg-title  {font-size: 2.75rem; line-height: 1.08; margin: 0 0 .35rem 0; letter-spacing:.1px;}
+      .cg-subtle {opacity:.95; margin:0; font-size: 1.08rem;}
 
       /* Section H2 (centered) */
       .cg-h2 {text-align:center; margin: 1.1rem 0 .7rem 0; font-size:1.35rem;}
 
       /* Cards */
-      .cg-card {
-        border: 1px solid var(--muted2);
-        border-radius: 16px;
-        padding: 14px 16px;
-        background: rgba(15,23,42,.45);
-        box-shadow: 0 10px 30px rgba(0,0,0,.25);
-      }
+      .cg-card {border: 1px solid var(--muted2); border-radius: 16px; padding: 14px 16px;
+                background: rgba(15,23,42,.45); box-shadow: 0 10px 30px rgba(0,0,0,.25);}
       .cg-upload {border: 1px dashed var(--muted); border-radius: 12px; padding: 12px 12px;}
 
       /* Pill */
@@ -112,54 +106,55 @@ st.markdown(
 
       /* Primary button */
       .stButton>button {
-        width: 100%;
-        padding: 12px 14px;
-        border-radius: 12px;
-        font-weight: 700;
-        border: 0;
-        color: #fff;
+        width: 100%; padding: 12px 14px; border-radius: 12px; font-weight: 700; border: 0; color: #fff;
         background: linear-gradient(90deg, var(--accent), var(--accent2));
         box-shadow: 0 8px 24px rgba(249,115,22,.35);
       }
       .stButton>button:hover {filter: brightness(1.07)}
 
       /* -------------------- SIDEBAR DECOR -------------------- */
-      [data-testid="stSidebar"] {
-        min-width: 320px; max-width: 360px;
-        border-right: 1px solid var(--muted2);
-      }
+      [data-testid="stSidebar"] {min-width: 330px; max-width: 360px; border-right: 1px solid var(--muted2);}
       [data-testid="stSidebar"] > div:first-child {
-        background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 60%, #1f2937 100%);
-        color: var(--text);
+        background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 60%, #182234 100%); color: var(--text);
       }
-      .sb-brand { font-weight: 700; font-size: 1.08rem; letter-spacing:.2px; margin: 10px 12px 8px 12px; }
-      .sb-card {
-        border:1px solid rgba(255,255,255,.08);
-        background: rgba(255,255,255,.04);
-        border-radius: 14px;
-        padding: 12px 14px;
-        margin: 12px;
-      }
+      .sb-brand { font-weight: 700; font-size: 1.10rem; letter-spacing:.2px; margin: 12px 14px 10px 14px; }
+
+      .sb-card { border:1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.04);
+                 border-radius: 14px; padding: 12px 14px; margin: 12px; }
       .sb-small {font-size:12px; opacity:.85;}
       .sb-card ul, .sb-card ol {padding-left: 1.05rem; margin: .25rem 0 0 0;}
       .sb-card li {margin-bottom: 6px;}
-      .sb-kv b {opacity:.95;}
-      .sb-kv div {margin-bottom: 6px;}
+
+      /* CAPSTONE GRID (no title) */
+      .capstone-badge {
+        display:inline-flex; align-items:center; gap:8px; margin-bottom:10px;
+        background: linear-gradient(90deg, rgba(239,68,68,.18), rgba(249,115,22,.18));
+        border:1px solid rgba(249,115,22,.35); color:#ffd7c2; padding:6px 10px; border-radius:999px; font-size:12px;
+      }
+      .capstone-grid {
+        display:grid; grid-template-columns: 1fr 1fr; gap: 12px;
+      }
+      .cap-card {
+        border:1px solid rgba(255,255,255,.08);
+        background: rgba(255,255,255,.03);
+        border-radius: 12px; padding: 10px 12px;
+      }
+      .cap-title {font-weight:700; margin-bottom:6px;}
+      .cap-kv {font-size: 13px; line-height: 1.25rem;}
+      .cap-name {font-weight:600;}
+      .cap-id {opacity:.85;}
+      .divider {height:1px; background:rgba(255,255,255,.06); margin:10px 0;}
 
       /* Timeline */
       .timeline-wrap {margin-top: .75rem; margin-bottom: .75rem;}
       .timeline {
         --event: var(--accent);
         --track: rgba(148,163,184,.25);
-        height: 14px;
-        border-radius: 999px;
-        border: 1px solid var(--muted);
-        background: var(--track);
+        height: 14px; border-radius: 999px; border: 1px solid var(--muted); background: var(--track);
       }
       .timeline-legend {display:flex; gap:10px; align-items:center; font-size:12px; opacity:.9;}
       .legend-swatch {width:14px; height:10px; border-radius:3px; display:inline-block; border:1px solid var(--muted);}
-      .swatch-event {background:var(--accent);}
-      .swatch-track {background:rgba(148,163,184,.25);}
+      .swatch-event {background:var(--accent);} .swatch-track {background:rgba(148,163,184,.25);}
 
       /* Dataframe polish */
       .stDataFrame {border-radius: 10px; overflow:hidden; border:1px solid var(--muted2);}
@@ -185,23 +180,37 @@ with st.sidebar:
         """, unsafe_allow_html=True
     )
 
-    # Intro card (REPLACES "Method")
+    # Capstone-C card (NO "Intro" title)
     st.markdown(
         """
         <div class="sb-card">
-          <b>Intro</b><br/>
-          <div class="sb-kv">
-            <div><b>Capstone-C Project</b></div>
-            <div><b>Submitted By:</b></div>
-            <div>Tasfia Tahsin Annita<br/>2021-3-60-031</div>
-            <div>Md. Shakil Hossain<br/>2021-3-60-088</div>
-            <div>Kanij Fatema<br/>2021-3-60-095</div>
-            <div>Samura Rahman<br/>2021-3-60-064</div>
-            <div style="margin-top:8px;"><b>Supervised By:</b></div>
-            <div>Dr. Anisur Rahman<br/>Proctor<br/>Associate professor<br/>Department of Computer Science and Engineering<br/>East West University</div>
+          <span class="capstone-badge">🎓 Capstone-C Project • East West University</span>
+          <div class="capstone-grid">
+            <div class="cap-card">
+              <div class="cap-title">Submitted By</div>
+              <div class="cap-kv">
+                <div><span class="cap-name">Tasfia Tahsin Annita</span> <span class="cap-id">• 2021-3-60-031</span></div>
+                <div><span class="cap-name">Md. Shakil Hossain</span> <span class="cap-id">• 2021-3-60-088</span></div>
+                <div><span class="cap-name">Kanij Fatema</span> <span class="cap-id">• 2021-3-60-095</span></div>
+                <div><span class="cap-name">Samura Rahman</span> <span class="cap-id">• 2021-3-60-064</span></div>
+              </div>
+            </div>
+            <div class="cap-card">
+              <div class="cap-title">Supervised By</div>
+              <div class="cap-kv">
+                <div class="cap-name">Dr. Anisur Rahman</div>
+                <div>Proctor</div>
+                <div>Associate Professor</div>
+                <div>Department of Computer Science and Engineering</div>
+                <div>East West University</div>
+              </div>
+            </div>
           </div>
+          <div class="divider"></div>
+          <div class="sb-small">This application demonstrates ML-assisted analysis of crowd dynamics with visual evidence and interval summaries.</div>
         </div>
-        """, unsafe_allow_html=True
+        """,
+        unsafe_allow_html=True
     )
 
     # Outputs card
@@ -395,7 +404,6 @@ def analyze_video(
     max_match_dist = max(15, int(0.03 * max(W, H)))
     detector = build_blob_detector(W, H, min_frac, max_frac, min_circ, min_iner)
 
-    # Use numeric types for plotting
     frames_rows = [("frame_index","time_sec","timecode","head_count","delta_vs_prev",
                     "prob_cnn","cnn_label","heads_label","final_label")]
     events_rows = [("start_frame","end_frame","start_time_sec","end_time_sec","start_tc","end_tc","duration_sec")]
@@ -529,10 +537,9 @@ def render_results(df_frames, df_events, labeled_path):
     c2.metric("Total Duration (s)", f"{total_dur:.2f}")
     c3.metric("Longest Event (s)", f"{longest:.2f}")
 
-    # Confetti if we detected anything (JS in an iframe)
+    # Confetti if detected (JS in an iframe)
     if total_events > 0:
         components.html("""
-        <div id="confetti"></div>
         <canvas id="c"></canvas>
         <style>
           #c{position:relative;width:100%;height:140px;display:block;border-radius:12px;margin:6px 0 4px 0;
