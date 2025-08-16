@@ -1,6 +1,6 @@
 # app.py — Crowd Guardian (Video only)
 # Premium UI: custom HTML/CSS, decorated sidebar, timeline, Altair charts, JS confetti
-# Uploader wrapper removed to eliminate the extra box above the dropzone.
+# Animated particles/starfield background (Option C) injected once at page load.
 
 import os
 import cv2
@@ -161,12 +161,54 @@ st.markdown(
 )
 
 # =============================================================================
+# Background Particles (JS canvas behind page)
+# =============================================================================
+components.html("""
+<canvas id="cg-bg"></canvas>
+<style>
+  #cg-bg{position:fixed; inset:0; z-index:-2; background:transparent;}
+</style>
+<script>
+  const c = document.getElementById('cg-bg'), ctx = c.getContext('2d');
+  function resize(){ c.width = innerWidth; c.height = innerHeight; }
+  addEventListener('resize', resize); resize();
+
+  const N = 120;
+  const P = Array.from({length:N}, () => ({
+    x: Math.random()*c.width,
+    y: Math.random()*c.height,
+    vx: -0.25 + Math.random()*0.5,
+    vy: -0.25 + Math.random()*0.5,
+    s: 0.6 + Math.random()*1.6,
+    a: Math.random()*Math.PI*2
+  }));
+
+  function tick(){
+    ctx.clearRect(0,0,c.width,c.height);
+    P.forEach(p=>{
+      p.x += p.vx; p.y += p.vy; p.a += 0.02;
+      if(p.x<0) p.x=c.width; if(p.x>c.width) p.x=0;
+      if(p.y<0) p.y=c.height; if(p.y>c.height) p.y=0;
+
+      // soft glowing dots
+      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 6+p.s*2);
+      g.addColorStop(0, 'rgba(255,255,255,0.8)');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(p.x,p.y, 1.2+p.s, 0, Math.PI*2); ctx.fill();
+    });
+    requestAnimationFrame(tick);
+  }
+  tick();
+</script>
+""", height=0)
+
+# =============================================================================
 # Sidebar — PROJECT DETAILS (no settings)
 # =============================================================================
 with st.sidebar:
     st.markdown('<div class="sb-brand">🛡️ Crowd Guardian</div>', unsafe_allow_html=True)
 
-    # Overview card
     st.markdown(
         """
         <div class="sb-card">
@@ -177,7 +219,6 @@ with st.sidebar:
         """, unsafe_allow_html=True
     )
 
-    # Capstone-C card (no "Intro" title)
     st.markdown(
         """
         <div class="sb-card">
@@ -210,7 +251,6 @@ with st.sidebar:
         unsafe_allow_html=True
     )
 
-    # Outputs card
     st.markdown(
         """
         <div class="sb-card">
@@ -224,7 +264,6 @@ with st.sidebar:
         """, unsafe_allow_html=True
     )
 
-    # Environment chip
     try:
         import tensorflow as tf
         tf_ver = tf.__version__
@@ -358,7 +397,7 @@ if load_err:
     st.caption(load_err)
 
 # =============================================================================
-# Upload (NO wrapper — extra box removed)
+# Upload (no wrapper)
 # =============================================================================
 st.markdown('<h2 class="cg-h2">Upload a crowd video</h2>', unsafe_allow_html=True)
 uploaded = st.file_uploader(
