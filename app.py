@@ -1,5 +1,5 @@
 # app.py — Crowd Guardian (Video only)
-# Premium UI: custom HTML/CSS, decorated sidebar, timeline with status banner,
+# Premium UI: custom HTML/CSS, decorated sidebar, status banner (no timeline bar),
 # Altair charts, JS confetti, and animated particles/starfield background.
 
 import os
@@ -40,6 +40,9 @@ MIN_CIRC      = 0.20
 MIN_INER      = 0.10
 DRAW_LINKS    = True
 TARGET_FPS    = None  # None = use every frame
+
+# ---------- Toggle: show timeline bar? ----------
+SHOW_TIMELINE = False  # <— removed the grey timeline bar
 
 # ---------- Model location ----------
 APP_DIR = Path(__file__).resolve().parent
@@ -139,20 +142,10 @@ st.markdown(
       .cap-id {opacity:.85;}
       .divider {height:1px; background:rgba(255,255,255,.06); margin:10px 0;}
 
-      /* Timeline + STATUS BANNER */
-      .timeline-wrap {margin-top: .6rem; margin-bottom: .6rem;}
-      .timeline {
-        --event: var(--accent);
-        --track: rgba(148,163,184,.25);
-        height: 14px; border-radius: 999px; border: 1px solid var(--muted); background: var(--track);
-      }
-      .timeline-legend {display:flex; gap:10px; align-items:center; font-size:12px; opacity:.9;}
-      .legend-swatch {width:14px; height:10px; border-radius:3px; display:inline-block; border:1px solid var(--muted);}
-      .swatch-event {background:var(--accent);} .swatch-track {background:rgba(148,163,184,.25);}
-
+      /* STATUS BANNER (timeline removed) */
       .status-banner{
         display:flex; align-items:center; justify-content:center;
-        gap:10px; height:52px; border-radius:12px; margin-bottom:12px;
+        gap:10px; height:52px; border-radius:12px; margin:12px 0;
         font-weight:800; letter-spacing:.3px; text-transform:uppercase;
         border:1px solid rgba(255,255,255,.10);
         box-shadow: 0 6px 18px rgba(0,0,0,.25);
@@ -557,25 +550,22 @@ def analyze_video(
     df_events = pd.DataFrame(events_rows[1:], columns=events_rows[0])
     return df_frames, df_events, playable_path
 
-# ---- Build a CSS gradient timeline bar from events ----
+# ---- (Optional) timeline gradient helper left here for later use
 def make_timeline_gradient(total_sec: float, events_df: pd.DataFrame) -> str:
     if total_sec <= 0: return ""
-    stops = []
-    last_pct = 0.0
+    stops, last_pct = [], 0.0
     if not events_df.empty:
         for _, r in events_df.iterrows():
             s = float(r["start_time_sec"]); e = float(r["end_time_sec"])
             s_pct = max(0.0, min(100.0, (s / total_sec) * 100.0))
             e_pct = max(0.0, min(100.0, (e / total_sec) * 100.0))
-            if s_pct > last_pct:
-                stops.append(f"var(--track) {last_pct:.3f}%, var(--track) {s_pct:.3f}%")
+            if s_pct > last_pct: stops.append(f"var(--track) {last_pct:.3f}%, var(--track) {s_pct:.3f}%")
             stops.append(f"var(--event) {s_pct:.3f}%, var(--event) {e_pct:.3f}%")
             last_pct = e_pct
-    if last_pct < 100.0:
-        stops.append(f"var(--track) {last_pct:.3f}%, var(--track) 100%")
+    if last_pct < 100.0: stops.append(f"var(--track) {last_pct:.3f}%, var(--track) 100%")
     return "linear-gradient(90deg, " + ", ".join(stops) + ")"
 
-# ---- Render results with visuals ----
+# ---- Render results with visuals (no timeline bar)
 def render_results(df_frames, df_events, labeled_path):
     st.markdown('<h2 class="cg-h2">Results</h2>', unsafe_allow_html=True)
 
@@ -624,34 +614,15 @@ def render_results(df_frames, df_events, labeled_path):
         </script>
         """, height=160)
 
-    # Timeline card with STATUS BANNER inside
+    # Status banner (only)
     st.markdown('<div class="cg-card">', unsafe_allow_html=True)
-
-    # Status banner
     status_cls = "status-ok" if total_events > 0 else "status-safe"
     status_text = "Stampede detected" if total_events > 0 else "No stampede detected"
     st.markdown(
         f'<div class="status-banner {status_cls}"><span class="status-dot"></span>{status_text}</div>',
         unsafe_allow_html=True
     )
-
-    # Timeline bar
-    total_sec = float(df_frames["time_sec"].max()) if not df_frames.empty else 0.0
-    grad = make_timeline_gradient(total_sec, df_events)
-    st.markdown('<div class="timeline-wrap">', unsafe_allow_html=True)
-    if grad:
-        st.markdown(f'<div class="timeline" style="background:{grad}"></div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="timeline"></div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="timeline-legend">'
-        '<span class="legend-swatch swatch-track"></span> Track'
-        '<span class="legend-swatch swatch-event"></span> Detected Event'
-        f'<span style="margin-left:auto; font-size:12px; opacity:.8;">0s — {total_sec:.2f}s</span>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown("</div>", unsafe_allow_html=True)  # end cg-card
+    st.markdown('</div>', unsafe_allow_html=True)
 
     # Charts
     if not df_frames.empty:
