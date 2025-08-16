@@ -1,6 +1,6 @@
 # app.py — Crowd Guardian (Video only)
 # Premium UI: custom HTML/CSS, decorated sidebar, timeline, Altair charts, JS confetti
-# Sidebar now shows a stylized Capstone-C details card (no "Intro" title).
+# Uploader wrapper removed to eliminate the extra box above the dropzone.
 
 import os
 import cv2
@@ -95,7 +95,6 @@ st.markdown(
       /* Cards */
       .cg-card {border: 1px solid var(--muted2); border-radius: 16px; padding: 14px 16px;
                 background: rgba(15,23,42,.45); box-shadow: 0 10px 30px rgba(0,0,0,.25);}
-      .cg-upload {border: 1px dashed var(--muted); border-radius: 12px; padding: 12px 12px;}
 
       /* Pill */
       .cg-center {display:flex; justify-content:center; margin-top:.6rem;}
@@ -125,20 +124,15 @@ st.markdown(
       .sb-card ul, .sb-card ol {padding-left: 1.05rem; margin: .25rem 0 0 0;}
       .sb-card li {margin-bottom: 6px;}
 
-      /* CAPSTONE GRID (no title) */
+      /* CAPSTONE GRID (no title header) */
       .capstone-badge {
         display:inline-flex; align-items:center; gap:8px; margin-bottom:10px;
         background: linear-gradient(90deg, rgba(239,68,68,.18), rgba(249,115,22,.18));
         border:1px solid rgba(249,115,22,.35); color:#ffd7c2; padding:6px 10px; border-radius:999px; font-size:12px;
       }
-      .capstone-grid {
-        display:grid; grid-template-columns: 1fr 1fr; gap: 12px;
-      }
-      .cap-card {
-        border:1px solid rgba(255,255,255,.08);
-        background: rgba(255,255,255,.03);
-        border-radius: 12px; padding: 10px 12px;
-      }
+      .capstone-grid { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .cap-card { border:1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.03);
+                  border-radius: 12px; padding: 10px 12px; }
       .cap-title {font-weight:700; margin-bottom:6px;}
       .cap-kv {font-size: 13px; line-height: 1.25rem;}
       .cap-name {font-weight:600;}
@@ -158,6 +152,9 @@ st.markdown(
 
       /* Dataframe polish */
       .stDataFrame {border-radius: 10px; overflow:hidden; border:1px solid var(--muted2);}
+
+      /* Tighten the dropzone spacing (no extra box/wrapper used) */
+      [data-testid="stFileUploadDropzone"]{ margin-top: 0 !important; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -180,7 +177,7 @@ with st.sidebar:
         """, unsafe_allow_html=True
     )
 
-    # Capstone-C card (NO "Intro" title)
+    # Capstone-C card (no "Intro" title)
     st.markdown(
         """
         <div class="sb-card">
@@ -361,16 +358,14 @@ if load_err:
     st.caption(load_err)
 
 # =============================================================================
-# Upload
+# Upload (NO wrapper — extra box removed)
 # =============================================================================
 st.markdown('<h2 class="cg-h2">Upload a crowd video</h2>', unsafe_allow_html=True)
-st.markdown('<div class="cg-card cg-upload">', unsafe_allow_html=True)
 uploaded = st.file_uploader(
     "Drag & drop a video (MP4, MOV, MKV, AVI, MPEG4) or browse",
     type=["mp4","mov","mkv","avi","mpeg4"],
     label_visibility="collapsed",
 )
-st.markdown("</div>", unsafe_allow_html=True)
 go = st.button("Analyze")
 
 # =============================================================================
@@ -537,7 +532,7 @@ def render_results(df_frames, df_events, labeled_path):
     c2.metric("Total Duration (s)", f"{total_dur:.2f}")
     c3.metric("Longest Event (s)", f"{longest:.2f}")
 
-    # Confetti if detected (JS in an iframe)
+    # Confetti if detected
     if total_events > 0:
         components.html("""
         <canvas id="c"></canvas>
@@ -592,7 +587,7 @@ def render_results(df_frames, df_events, labeled_path):
     )
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Charts: Altair (probability & head count)
+    # Charts
     if not df_frames.empty:
         base = alt.Chart(df_frames).properties(height=240)
         left, right = st.columns(2)
