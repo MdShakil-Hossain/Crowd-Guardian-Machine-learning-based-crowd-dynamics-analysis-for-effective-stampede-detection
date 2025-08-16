@@ -1,5 +1,6 @@
 # app.py — Crowd Guardian (Video only)
 # Professional UI: custom HTML/CSS, decorated sidebar, timeline, Altair charts, JS confetti
+# Sidebar "Method" replaced with your Intro section.
 
 import os
 import cv2
@@ -142,6 +143,8 @@ st.markdown(
       .sb-small {font-size:12px; opacity:.85;}
       .sb-card ul, .sb-card ol {padding-left: 1.05rem; margin: .25rem 0 0 0;}
       .sb-card li {margin-bottom: 6px;}
+      .sb-kv b {opacity:.95;}
+      .sb-kv div {margin-bottom: 6px;}
 
       /* Timeline */
       .timeline-wrap {margin-top: .75rem; margin-bottom: .75rem;}
@@ -170,6 +173,8 @@ st.markdown(
 # =============================================================================
 with st.sidebar:
     st.markdown('<div class="sb-brand">🛡️ Crowd Guardian</div>', unsafe_allow_html=True)
+
+    # Overview card
     st.markdown(
         """
         <div class="sb-card">
@@ -179,20 +184,27 @@ with st.sidebar:
         </div>
         """, unsafe_allow_html=True
     )
+
+    # Intro card (REPLACES "Method")
     st.markdown(
-        f"""
+        """
         <div class="sb-card">
-          <b>Method</b>
-          <ul>
-            <li>Grayscale frames → head-like blobs (OpenCV SimpleBlobDetector).</li>
-            <li>CNN on 100×100 grayscale inputs (τ={CNN_THRESHOLD:.2f}).</li>
-            <li>Head-drop: Δ≥{ABS_DROP} or {int(REL_DROP*100)}% vs. previous frame.</li>
-            <li>Decision: <code>{COMBINE_RULE}</code> of CNN &amp; head-drop.</li>
-            <li>Merge consecutive positives into events ≥ {MIN_EVENT_SEC:.1f}s.</li>
-          </ul>
+          <b>Intro</b><br/>
+          <div class="sb-kv">
+            <div><b>Capstone-C Project</b></div>
+            <div><b>Submitted By:</b></div>
+            <div>Tasfia Tahsin Annita<br/>2021-3-60-031</div>
+            <div>Md. Shakil Hossain<br/>2021-3-60-088</div>
+            <div>Kanij Fatema<br/>2021-3-60-095</div>
+            <div>Samura Rahman<br/>2021-3-60-064</div>
+            <div style="margin-top:8px;"><b>Supervised By:</b></div>
+            <div>Dr. Anisur Rahman<br/>Proctor<br/>Associate professor<br/>Department of Computer Science and Engineering<br/>East West University</div>
+          </div>
         </div>
         """, unsafe_allow_html=True
     )
+
+    # Outputs card
     st.markdown(
         """
         <div class="sb-card">
@@ -205,6 +217,7 @@ with st.sidebar:
         </div>
         """, unsafe_allow_html=True
     )
+
     # Environment chip
     try:
         import tensorflow as tf
