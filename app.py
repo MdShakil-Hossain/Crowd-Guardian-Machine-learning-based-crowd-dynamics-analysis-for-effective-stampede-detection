@@ -1,5 +1,5 @@
 # app.py — Crowd Guardian (Video only)
-# Centered, polished UI + "Project Details" sidebar + silent model load
+# Centered UI + DECORATED LEFT SIDEBAR (Project Details) + silent model load
 
 import os
 import cv2
@@ -17,15 +17,15 @@ from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import urllib.request, hashlib
 
 # =============================================================================
-# App config (no visible settings)
+# App config (sidebar visible)
 # =============================================================================
 st.set_page_config(
     page_title="Crowd Guardian: Machine learning based crowd dynamics analysis for effective stampede detection",
     layout="wide",
-    initial_sidebar_state="expanded",   # show the new project details by default
+    initial_sidebar_state="expanded",   # <— ensures the left sidebar is open
 )
 
-# ---- Fixed inference defaults ----
+# ---- Fixed inference defaults (no UI knobs) ----
 CNN_THRESHOLD = 0.50
 ABS_DROP      = 2
 REL_DROP      = 0.20
@@ -36,7 +36,7 @@ MAX_FRAC      = 0.0020
 MIN_CIRC      = 0.20
 MIN_INER      = 0.10
 DRAW_LINKS    = True
-TARGET_FPS    = None  # None = every frame
+TARGET_FPS    = None  # None = all frames
 
 # ---- Model location ----
 APP_DIR = Path(__file__).resolve().parent
@@ -48,48 +48,47 @@ DEFAULT_MODEL_URL = (
 MODEL_URL = st.secrets.get("MODEL_URL", DEFAULT_MODEL_URL)
 
 # =============================================================================
-# Style — centered grid, larger title, tidy cards
+# Styles (bigger title, centered content, decorated SIDEBAR)
 # =============================================================================
 st.markdown(
     """
     <style>
-      /* Center the main column and tighten spacing */
-      .main .block-container {max-width: 960px; padding-top: 1.25rem; padding-bottom: 2.25rem;}
+      /* Main column width & spacing */
+      .main .block-container {max-width: 980px; padding-top: 1.0rem; padding-bottom: 2.0rem;}
 
-      /* Big centered hero */
+      /* HERO */
       .cg-hero {
-        padding: 22px 26px;
+        padding: 24px 28px;
         border-radius: 18px;
         border: 1px solid rgba(148,163,184,.18);
         background:
-          radial-gradient(1100px 360px at 0% -10%, rgba(59,130,246,.16), transparent),
+          radial-gradient(1200px 420px at 0% -10%, rgba(59,130,246,.16), transparent),
           linear-gradient(180deg, rgba(17,24,39,.55), rgba(2,6,23,.45));
         text-align: center;
       }
-      .cg-title   {font-size: 2.05rem; line-height: 1.2; margin: 0 0 .35rem 0; letter-spacing:.3px;}
-      .cg-subtle  {opacity:.9; margin:0; font-size: 1.02rem;}
+      .cg-title  {font-size: 2.25rem; line-height: 1.15; margin: 0 0 .35rem 0; letter-spacing:.2px;}
+      .cg-subtle {opacity:.92; margin:0; font-size: 1.05rem;}
 
-      /* Section headings centered */
-      .cg-h2 {text-align:center; margin: 1.2rem 0 .7rem 0; font-size:1.35rem;}
+      /* Section H2 (centered) */
+      .cg-h2 {text-align:center; margin: 1.1rem 0 .7rem 0; font-size:1.4rem;}
 
-      /* Generic card */
+      /* Cards */
       .cg-card {
         border: 1px solid rgba(148,163,184,.18);
         border-radius: 16px;
-        padding: 16px 18px;
+        padding: 14px 16px;
         background: rgba(15,23,42,.35);
       }
-      /* Upload area */
       .cg-upload {border: 1px dashed rgba(148,163,184,.35); border-radius: 12px; padding: 12px 12px;}
 
-      /* Status pills centered */
+      /* Status pill */
       .cg-center {display:flex; justify-content:center; margin-top:.6rem;}
-      .pill {display:inline-block; padding:2px 12px; border-radius:999px; font-size:12px;
+      .pill {display:inline-block; padding:3px 12px; border-radius:999px; font-size:12px;
              border:1px solid rgba(148,163,184,.35); background: rgba(30,41,59,.45)}
       .ok   {background: rgba(16,185,129,.18); color:#a7f3d0; border-color: rgba(16,185,129,.35)}
       .err  {background: rgba(239,68,68,.18); color:#fecaca; border-color: rgba(239,68,68,.35)}
 
-      /* Primary button full-width, neat */
+      /* Primary button */
       .stButton>button {
         width: 100%;
         padding: 12px 14px;
@@ -100,77 +99,86 @@ st.markdown(
       }
       .stButton>button:hover {filter: brightness(1.07)}
 
-      /* Sidebar styling for project details */
+      /* -------------------- SIDEBAR DECOR -------------------- */
+      [data-testid="stSidebar"] {
+        min-width: 320px; max-width: 340px;
+        border-right: 1px solid rgba(148,163,184,.15);
+      }
       [data-testid="stSidebar"] > div:first-child {
         background: linear-gradient(180deg, #0f172a 0%, #111827 60%, #1f2937 100%);
         color: #e5e7eb;
       }
-      .side-card {
+      .sb-brand {
+        font-weight: 700; font-size: 1.05rem; letter-spacing:.2px; margin: 10px 12px 4px 12px;
+      }
+      .sb-card {
         border:1px solid rgba(255,255,255,.08);
         background: rgba(255,255,255,.04);
         border-radius: 14px;
         padding: 12px 14px;
         margin: 12px;
       }
-      .side-small {font-size:12px; opacity:.85;}
-      .side-list li {margin-bottom: 6px;}
+      .sb-small {font-size:12px; opacity:.85;}
+      .sb-card ul, .sb-card ol {padding-left: 1.05rem; margin: .25rem 0 0 0;}
+      .sb-card li {margin-bottom: 6px;}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 # =============================================================================
-# Sidebar — Project Details (replaces settings)
+# Sidebar — PROJECT DETAILS (no settings)
 # =============================================================================
 with st.sidebar:
-    st.markdown("<h3>📘 Project Details</h3>", unsafe_allow_html=True)
+    st.markdown('<div class="sb-brand">🛡️ Crowd Guardian</div>', unsafe_allow_html=True)
     st.markdown(
         """
-        <div class="side-card">
-          <b>Purpose</b><br/>
-          Detect potential stampede intervals in crowd videos by combining a CNN on grayscale frames with a head-count drop heuristic.
+        <div class="sb-card">
+          <b>Overview</b><br/>
+          Detect potential stampede intervals in crowd videos by combining a CNN on grayscale frames
+          with a head-count drop heuristic and event aggregation.
         </div>
         """, unsafe_allow_html=True
     )
     st.markdown(
         f"""
-        <div class="side-card">
+        <div class="sb-card">
           <b>Method</b>
-          <ul class="side-list">
-            <li>Convert frames → grayscale and detect head-like blobs.</li>
-            <li>Run CNN on 100×100 crops of each frame.</li>
-            <li>Combine labels (<code>{COMBINE_RULE}</code>) of CNN (τ={CNN_THRESHOLD:.2f})
-                and head-count drop (Δ≥{ABS_DROP} or {REL_DROP*100:.0f}%).</li>
-            <li>Aggregate consecutive positives into events (≥ {MIN_EVENT_SEC:.1f}s).</li>
+          <ul>
+            <li>Convert frames → grayscale and detect head-like blobs (OpenCV SimpleBlobDetector).</li>
+            <li>Run a CNN on 100×100 grayscale inputs (τ={CNN_THRESHOLD:.2f}).</li>
+            <li>Head-drop: Δ≥{ABS_DROP} or {int(REL_DROP*100)}% vs. previous frame.</li>
+            <li>Decision rule: <code>{COMBINE_RULE}</code> (CNN &amp; head-drop).</li>
+            <li>Merge consecutive positives into events ≥ {MIN_EVENT_SEC:.1f}s.</li>
           </ul>
         </div>
         """, unsafe_allow_html=True
     )
     st.markdown(
         """
-        <div class="side-card">
+        <div class="sb-card">
           <b>Outputs</b>
-          <ul class="side-list">
-            <li><code>events.csv</code> — start/end times of detected intervals</li>
-            <li><code>frame_preds.csv</code> — per-frame metrics and labels</li>
-            <li><code>labeled.mp4</code> — video overlay with live stats</li>
+          <ul>
+            <li><code>events.csv</code> — start/end/duration of intervals</li>
+            <li><code>frame_preds.csv</code> — per-frame metrics & labels</li>
+            <li><code>labeled.mp4</code> — overlay video with live stats</li>
           </ul>
         </div>
         """, unsafe_allow_html=True
     )
-    # Tiny environment chip
+    # Environment chip
     try:
         import tensorflow as tf
         tf_ver = tf.__version__
     except Exception:
         tf_ver = "not loaded"
     st.markdown(
-        f'<div class="side-card side-small">Environment: TF {tf_ver} • NumPy {np.__version__} • OpenCV {cv2.__version__}</div>',
+        f'<div class="sb-card sb-small">Environment: TF {tf_ver} • NumPy {np.__version__} • OpenCV {cv2.__version__}</div>',
         unsafe_allow_html=True,
     )
 
 # =============================================================================
-# Hero (centered)
+# HERO
 # =============================================================================
 st.markdown(
     '<div class="cg-hero">'
@@ -181,7 +189,7 @@ st.markdown(
 )
 
 # =============================================================================
-# Helpers
+# Helpers (unchanged ML logic)
 # =============================================================================
 def _normalize_dropbox(url: str) -> str:
     if "dropbox.com" not in url: return url
@@ -275,7 +283,7 @@ def transcode_to_h264(src_path: str, dst_path: str, fps: float):
     return (dst_path if ok else src_path), ok, (proc.stderr or "")
 
 # =============================================================================
-# Load model (silent) + status (centered)
+# Load model (silent) + status
 # =============================================================================
 model, load_err = None, None
 try:
@@ -292,7 +300,7 @@ if load_err:
     st.caption(load_err)
 
 # =============================================================================
-# Upload (centered)
+# Upload
 # =============================================================================
 st.markdown('<h2 class="cg-h2">Upload a crowd video</h2>', unsafe_allow_html=True)
 st.markdown('<div class="cg-card cg-upload">', unsafe_allow_html=True)
@@ -438,14 +446,14 @@ def analyze_video(
 def render_results(df_frames, df_events, labeled_path):
     st.markdown('<h2 class="cg-h2">Results</h2>', unsafe_allow_html=True)
 
-    # KPIs centered
-    k1, k2, k3 = st.columns(3)
+    # KPIs
+    c1, c2, c3 = st.columns(3)
     total_events = int(len(df_events))
     total_dur = float(df_events["duration_sec"].astype(float).sum()) if not df_events.empty else 0.0
     longest = float(df_events["duration_sec"].astype(float).max()) if not df_events.empty else 0.0
-    k1.metric("Events", total_events)
-    k2.metric("Total Duration (s)", f"{total_dur:.2f}")
-    k3.metric("Longest Event (s)", f"{longest:.2f}")
+    c1.metric("Events", total_events)
+    c2.metric("Total Duration (s)", f"{total_dur:.2f}")
+    c3.metric("Longest Event (s)", f"{longest:.2f}")
 
     st.markdown('<div class="cg-card">', unsafe_allow_html=True)
     if not df_events.empty:
@@ -480,7 +488,14 @@ def render_results(df_frames, df_events, labeled_path):
 # =============================================================================
 # Drive
 # =============================================================================
-if go:
+if st.button if False else None:  # (placeholder to avoid accidental reflow in some editors)
+    pass
+
+if st.session_state.get("_"):
+    pass
+
+go_clicked = go
+if go_clicked:
     if not model:
         st.error("Model not loaded.")
     elif not uploaded:
