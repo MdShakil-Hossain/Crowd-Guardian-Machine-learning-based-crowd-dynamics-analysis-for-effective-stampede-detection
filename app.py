@@ -1,6 +1,6 @@
 # app.py — Crowd Guardian (Video only)
-# Premium UI: custom HTML/CSS, decorated sidebar, timeline, Altair charts, JS confetti
-# Animated particles/starfield background (Option C) injected once at page load.
+# Premium UI: custom HTML/CSS, decorated sidebar, timeline with status banner,
+# Altair charts, JS confetti, and animated particles/starfield background.
 
 import os
 import cv2
@@ -124,7 +124,7 @@ st.markdown(
       .sb-card ul, .sb-card ol {padding-left: 1.05rem; margin: .25rem 0 0 0;}
       .sb-card li {margin-bottom: 6px;}
 
-      /* CAPSTONE GRID (no title header) */
+      /* CAPSTONE GRID */
       .capstone-badge {
         display:inline-flex; align-items:center; gap:8px; margin-bottom:10px;
         background: linear-gradient(90deg, rgba(239,68,68,.18), rgba(249,115,22,.18));
@@ -139,8 +139,8 @@ st.markdown(
       .cap-id {opacity:.85;}
       .divider {height:1px; background:rgba(255,255,255,.06); margin:10px 0;}
 
-      /* Timeline */
-      .timeline-wrap {margin-top: .75rem; margin-bottom: .75rem;}
+      /* Timeline + STATUS BANNER */
+      .timeline-wrap {margin-top: .6rem; margin-bottom: .6rem;}
       .timeline {
         --event: var(--accent);
         --track: rgba(148,163,184,.25);
@@ -150,10 +150,29 @@ st.markdown(
       .legend-swatch {width:14px; height:10px; border-radius:3px; display:inline-block; border:1px solid var(--muted);}
       .swatch-event {background:var(--accent);} .swatch-track {background:rgba(148,163,184,.25);}
 
+      .status-banner{
+        display:flex; align-items:center; justify-content:center;
+        gap:10px; height:52px; border-radius:12px; margin-bottom:12px;
+        font-weight:800; letter-spacing:.3px; text-transform:uppercase;
+        border:1px solid rgba(255,255,255,.10);
+        box-shadow: 0 6px 18px rgba(0,0,0,.25);
+      }
+      .status-dot{width:10px; height:10px; border-radius:50%; display:inline-block; box-shadow:0 0 0 3px rgba(255,255,255,.06) inset;}
+      .status-ok{
+        background: linear-gradient(90deg, rgba(239,68,68,.22), rgba(249,115,22,.22));
+        color:#ffe5d5;
+      }
+      .status-safe{
+        background: linear-gradient(90deg, rgba(16,185,129,.22), rgba(59,130,246,.22));
+        color:#dcfce7;
+      }
+      .status-ok .status-dot{background:#ef4444;}
+      .status-safe .status-dot{background:#10b981;}
+
       /* Dataframe polish */
       .stDataFrame {border-radius: 10px; overflow:hidden; border:1px solid var(--muted2);}
 
-      /* Tighten the dropzone spacing (no extra box/wrapper used) */
+      /* Tighten the dropzone spacing */
       [data-testid="stFileUploadDropzone"]{ margin-top: 0 !important; }
     </style>
     """,
@@ -179,18 +198,16 @@ components.html("""
     y: Math.random()*c.height,
     vx: -0.25 + Math.random()*0.5,
     vy: -0.25 + Math.random()*0.5,
-    s: 0.6 + Math.random()*1.6,
-    a: Math.random()*Math.PI*2
+    s: 0.6 + Math.random()*1.6
   }));
 
   function tick(){
     ctx.clearRect(0,0,c.width,c.height);
     P.forEach(p=>{
-      p.x += p.vx; p.y += p.vy; p.a += 0.02;
+      p.x += p.vx; p.y += p.vy;
       if(p.x<0) p.x=c.width; if(p.x>c.width) p.x=0;
       if(p.y<0) p.y=c.height; if(p.y>c.height) p.y=0;
 
-      // soft glowing dots
       const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 6+p.s*2);
       g.addColorStop(0, 'rgba(255,255,255,0.8)');
       g.addColorStop(1, 'rgba(255,255,255,0)');
@@ -607,8 +624,18 @@ def render_results(df_frames, df_events, labeled_path):
         </script>
         """, height=160)
 
-    # Timeline bar
+    # Timeline card with STATUS BANNER inside
     st.markdown('<div class="cg-card">', unsafe_allow_html=True)
+
+    # Status banner
+    status_cls = "status-ok" if total_events > 0 else "status-safe"
+    status_text = "Stampede detected" if total_events > 0 else "No stampede detected"
+    st.markdown(
+        f'<div class="status-banner {status_cls}"><span class="status-dot"></span>{status_text}</div>',
+        unsafe_allow_html=True
+    )
+
+    # Timeline bar
     total_sec = float(df_frames["time_sec"].max()) if not df_frames.empty else 0.0
     grad = make_timeline_gradient(total_sec, df_events)
     st.markdown('<div class="timeline-wrap">', unsafe_allow_html=True)
@@ -624,7 +651,7 @@ def render_results(df_frames, df_events, labeled_path):
         '</div>',
         unsafe_allow_html=True,
     )
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)  # end cg-card
 
     # Charts
     if not df_frames.empty:
@@ -655,7 +682,7 @@ def render_results(df_frames, df_events, labeled_path):
         st.subheader("Detected intervals")
         st.dataframe(df_events, use_container_width=True)
     else:
-        st.info("No stampede detected.")
+        st.info("No stampede intervals found.")
 
     st.subheader("Per-frame predictions")
     st.dataframe(df_frames.head(1000), use_container_width=True)
