@@ -1,5 +1,5 @@
 # app.py — Crowd Guardian (Video only)
-# Centered UI + DECORATED LEFT SIDEBAR (Project Details) + silent model load
+# Polished UI: decorated sidebar, centered hero, event timeline, charts, silent model load
 
 import os
 import cv2
@@ -17,15 +17,15 @@ from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import urllib.request, hashlib
 
 # =============================================================================
-# App config (sidebar visible)
+# App config
 # =============================================================================
 st.set_page_config(
     page_title="Crowd Guardian: Machine learning based crowd dynamics analysis for effective stampede detection",
     layout="wide",
-    initial_sidebar_state="expanded",   # <— ensures the left sidebar is open
+    initial_sidebar_state="expanded",
 )
 
-# ---- Fixed inference defaults (no UI knobs) ----
+# ---------- Inference defaults (no UI knobs) ----------
 CNN_THRESHOLD = 0.50
 ABS_DROP      = 2
 REL_DROP      = 0.20
@@ -36,9 +36,9 @@ MAX_FRAC      = 0.0020
 MIN_CIRC      = 0.20
 MIN_INER      = 0.10
 DRAW_LINKS    = True
-TARGET_FPS    = None  # None = all frames
+TARGET_FPS    = None  # None = use every frame
 
-# ---- Model location ----
+# ---------- Model location ----------
 APP_DIR = Path(__file__).resolve().parent
 CACHE_DIR = APP_DIR / "models"; CACHE_DIR.mkdir(exist_ok=True)
 DEFAULT_MODEL_URL = (
@@ -48,17 +48,20 @@ DEFAULT_MODEL_URL = (
 MODEL_URL = st.secrets.get("MODEL_URL", DEFAULT_MODEL_URL)
 
 # =============================================================================
-# Styles (bigger title, centered content, decorated SIDEBAR)
+# Styles (centered layout, big title, decorated sidebar, timeline)
 # =============================================================================
 st.markdown(
     """
     <style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+      html, body, [class*="css"] { font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+
       /* Main column width & spacing */
       .main .block-container {max-width: 980px; padding-top: 1.0rem; padding-bottom: 2.0rem;}
 
       /* HERO */
       .cg-hero {
-        padding: 24px 28px;
+        padding: 26px 30px;
         border-radius: 18px;
         border: 1px solid rgba(148,163,184,.18);
         background:
@@ -66,7 +69,7 @@ st.markdown(
           linear-gradient(180deg, rgba(17,24,39,.55), rgba(2,6,23,.45));
         text-align: center;
       }
-      .cg-title  {font-size: 2.25rem; line-height: 1.15; margin: 0 0 .35rem 0; letter-spacing:.2px;}
+      .cg-title  {font-size: 2.35rem; line-height: 1.15; margin: 0 0 .35rem 0; letter-spacing:.2px;}
       .cg-subtle {opacity:.92; margin:0; font-size: 1.05rem;}
 
       /* Section H2 (centered) */
@@ -108,9 +111,7 @@ st.markdown(
         background: linear-gradient(180deg, #0f172a 0%, #111827 60%, #1f2937 100%);
         color: #e5e7eb;
       }
-      .sb-brand {
-        font-weight: 700; font-size: 1.05rem; letter-spacing:.2px; margin: 10px 12px 4px 12px;
-      }
+      .sb-brand { font-weight: 700; font-size: 1.05rem; letter-spacing:.2px; margin: 10px 12px 4px 12px; }
       .sb-card {
         border:1px solid rgba(255,255,255,.08);
         background: rgba(255,255,255,.04);
@@ -121,13 +122,28 @@ st.markdown(
       .sb-small {font-size:12px; opacity:.85;}
       .sb-card ul, .sb-card ol {padding-left: 1.05rem; margin: .25rem 0 0 0;}
       .sb-card li {margin-bottom: 6px;}
+
+      /* Timeline */
+      .timeline-wrap {margin-top: .75rem; margin-bottom: .75rem;}
+      .timeline {
+        --event: #ef4444;
+        --track: rgba(148,163,184,.25);
+        height: 14px;
+        border-radius: 999px;
+        border: 1px solid rgba(148,163,184,.35);
+        background: var(--track);
+      }
+      .timeline-legend {display:flex; gap:10px; align-items:center; font-size:12px; opacity:.9;}
+      .legend-swatch {width:14px; height:10px; border-radius:3px; display:inline-block; border:1px solid rgba(148,163,184,.35);}
+      .swatch-event {background:#ef4444;}
+      .swatch-track {background:rgba(148,163,184,.25);}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 # =============================================================================
-# Sidebar — PROJECT DETAILS (no settings)
+# Sidebar — PROJECT DETAILS
 # =============================================================================
 with st.sidebar:
     st.markdown('<div class="sb-brand">🛡️ Crowd Guardian</div>', unsafe_allow_html=True)
@@ -145,8 +161,8 @@ with st.sidebar:
         <div class="sb-card">
           <b>Method</b>
           <ul>
-            <li>Convert frames → grayscale and detect head-like blobs (OpenCV SimpleBlobDetector).</li>
-            <li>Run a CNN on 100×100 grayscale inputs (τ={CNN_THRESHOLD:.2f}).</li>
+            <li>Grayscale frames → detect head-like blobs (OpenCV SimpleBlobDetector).</li>
+            <li>Run CNN on 100×100 grayscale inputs (τ={CNN_THRESHOLD:.2f}).</li>
             <li>Head-drop: Δ≥{ABS_DROP} or {int(REL_DROP*100)}% vs. previous frame.</li>
             <li>Decision rule: <code>{COMBINE_RULE}</code> (CNN &amp; head-drop).</li>
             <li>Merge consecutive positives into events ≥ {MIN_EVENT_SEC:.1f}s.</li>
@@ -178,7 +194,7 @@ with st.sidebar:
     )
 
 # =============================================================================
-# HERO
+# Hero
 # =============================================================================
 st.markdown(
     '<div class="cg-hero">'
@@ -189,7 +205,7 @@ st.markdown(
 )
 
 # =============================================================================
-# Helpers (unchanged ML logic)
+# Helpers (ML)
 # =============================================================================
 def _normalize_dropbox(url: str) -> str:
     if "dropbox.com" not in url: return url
@@ -343,6 +359,7 @@ def analyze_video(
     max_match_dist = max(15, int(0.03 * max(W, H)))
     detector = build_blob_detector(W, H, min_frac, max_frac, min_circ, min_iner)
 
+    # Use numeric types (not strings) so we can plot easily
     frames_rows = [("frame_index","time_sec","timecode","head_count","delta_vs_prev",
                     "prob_cnn","cnn_label","heads_label","final_label")]
     events_rows = [("start_frame","end_frame","start_time_sec","end_time_sec","start_tc","end_tc","duration_sec")]
@@ -388,8 +405,8 @@ def analyze_video(
             final_label = combine_labels(y_heads, y_cnn, combine_rule)
 
             t = f / fps; tc = sec_to_tc(t)
-            frames_rows.append((f, f"{t:.3f}", tc, curr_count, delta,
-                                f"{p_cnn:.6f}", y_cnn, y_heads, final_label))
+            frames_rows.append((f, t, tc, curr_count, int(delta),
+                                p_cnn, y_cnn, y_heads, final_label))
 
             if final_label == 1 and not in_event:
                 in_event, start_f, start_t = True, f, t
@@ -397,8 +414,8 @@ def analyze_video(
                 dur_frames = (f - start_f) // step
                 if dur_frames >= min_event_frames:
                     end_t = (f-1) / fps
-                    events_rows.append((start_f, f-1, f"{start_t:.3f}", f"{end_t:.3f}",
-                                        sec_to_tc(start_t), sec_to_tc(end_t), f"{(end_t-start_t):.3f}"))
+                    events_rows.append((start_f, f-1, start_t, end_t,
+                                        sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
                 in_event, start_f, start_t = False, None, None
 
             # overlay
@@ -413,10 +430,12 @@ def analyze_video(
             banner_h = max(40, H//14)
             color = (0,0,255) if final_label==1 else (0,180,0)
             cv2.rectangle(vis, (0,0), (W, banner_h), color, -1)
-            txt = (f"heads={curr_count}  Δ={delta:+d}  "
-                   f"p_cnn={p_cnn:.2f} (τ={cnn_threshold:.2f})  "
-                   f"rule={combine_rule}  label={'Stampede' if final_label==1 else 'No Stampede'}  t={tc}")
-            cv2.putText(vis, txt, (12, banner_h-12), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255,255,255), 2, cv2.LINE_AA)
+            cv2.putText(
+                vis,
+                f"heads={curr_count}  Δ={delta:+d}  p_cnn={p_cnn:.2f} (τ={cnn_threshold:.2f})  "
+                f"rule={combine_rule}  label={'Stampede' if final_label==1 else 'No Stampede'}  t={tc}",
+                (12, banner_h-12), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255,255,255), 2, cv2.LINE_AA
+            )
 
             if out.isOpened(): out.write(vis)
             prev_pts, prev_count = head_pts, curr_count
@@ -429,8 +448,8 @@ def analyze_video(
 
     if in_event and start_f is not None:
         end_t = (f-1) / fps
-        events_rows.append((start_f, f-1, f"{start_t:.3f}", f"{end_t:.3f}",
-                            sec_to_tc(start_t), sec_to_tc(end_t), f"{(end_t-start_t):.3f}"))
+        events_rows.append((start_f, f-1, start_t, end_t,
+                            sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
 
     cap.release()
     if out.isOpened(): out.release()
@@ -441,7 +460,25 @@ def analyze_video(
     prog.progress(1.0); status.write("Done.")
     df_frames = pd.DataFrame(frames_rows[1:], columns=frames_rows[0])
     df_events = pd.DataFrame(events_rows[1:], columns=events_rows[0])
-    return df_frames, df_events, playable_path
+    return df_frames, df_events, playable_path, fps
+
+# ---- Build a CSS gradient timeline bar from events ----
+def make_timeline_gradient(total_sec: float, events_df: pd.DataFrame) -> str:
+    if total_sec <= 0: return ""
+    stops = []
+    last_pct = 0.0
+    if not events_df.empty:
+        for _, r in events_df.iterrows():
+            s = float(r["start_time_sec"]); e = float(r["end_time_sec"])
+            s_pct = max(0.0, min(100.0, (s / total_sec) * 100.0))
+            e_pct = max(0.0, min(100.0, (e / total_sec) * 100.0))
+            if s_pct > last_pct:
+                stops.append(f"var(--track) {last_pct:.3f}%, var(--track) {s_pct:.3f}%")
+            stops.append(f"var(--event) {s_pct:.3f}%, var(--event) {e_pct:.3f}%")
+            last_pct = e_pct
+    if last_pct < 100.0:
+        stops.append(f"var(--track) {last_pct:.3f}%, var(--track) 100%")
+    return "linear-gradient(90deg, " + ", ".join(stops) + ")"
 
 def render_results(df_frames, df_events, labeled_path):
     st.markdown('<h2 class="cg-h2">Results</h2>', unsafe_allow_html=True)
@@ -449,13 +486,48 @@ def render_results(df_frames, df_events, labeled_path):
     # KPIs
     c1, c2, c3 = st.columns(3)
     total_events = int(len(df_events))
-    total_dur = float(df_events["duration_sec"].astype(float).sum()) if not df_events.empty else 0.0
-    longest = float(df_events["duration_sec"].astype(float).max()) if not df_events.empty else 0.0
+    total_dur = float(df_events["duration_sec"].sum()) if not df_events.empty else 0.0
+    longest = float(df_events["duration_sec"].max()) if not df_events.empty else 0.0
     c1.metric("Events", total_events)
     c2.metric("Total Duration (s)", f"{total_dur:.2f}")
     c3.metric("Longest Event (s)", f"{longest:.2f}")
 
+    # Timeline bar
     st.markdown('<div class="cg-card">', unsafe_allow_html=True)
+    total_sec = float(df_frames["time_sec"].max()) if not df_frames.empty else 0.0
+    grad = make_timeline_gradient(total_sec, df_events)
+    st.markdown('<div class="timeline-wrap">', unsafe_allow_html=True)
+    if grad:
+        st.markdown(f'<div class="timeline" style="background:{grad}"></div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="timeline"></div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="timeline-legend">'
+        '<span class="legend-swatch swatch-track"></span> Track'
+        '<span class="legend-swatch swatch-event"></span> Detected Event'
+        f'<span style="margin-left:auto; font-size:12px; opacity:.8;">0s — {total_sec:.2f}s</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # Charts: probability & head count
+    if not df_frames.empty:
+        left, right = st.columns(2)
+        with left:
+            st.subheader("CNN Probability")
+            st.line_chart(
+                df_frames.set_index("frame_index")[["prob_cnn"]],
+                height=240
+            )
+        with right:
+            st.subheader("Estimated Head Count")
+            st.line_chart(
+                df_frames.set_index("frame_index")[["head_count"]],
+                height=240
+            )
+
+    # Tables + downloads
     if not df_events.empty:
         st.subheader("Detected intervals")
         st.dataframe(df_events, use_container_width=True)
@@ -479,7 +551,6 @@ def render_results(df_frames, df_events, labeled_path):
                                    mime="video/mp4", use_container_width=True)
         else:
             st.button("Video unavailable", disabled=True, use_container_width=True)
-    st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown('<h2 class="cg-h2">Labeled Video Preview</h2>', unsafe_allow_html=True)
     if os.path.exists(labeled_path): st.video(labeled_path)
@@ -488,14 +559,7 @@ def render_results(df_frames, df_events, labeled_path):
 # =============================================================================
 # Drive
 # =============================================================================
-if st.button if False else None:  # (placeholder to avoid accidental reflow in some editors)
-    pass
-
-if st.session_state.get("_"):
-    pass
-
-go_clicked = go
-if go_clicked:
+if go:
     if not model:
         st.error("Model not loaded.")
     elif not uploaded:
@@ -504,5 +568,5 @@ if go_clicked:
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded.name)[1])
         tmp.write(uploaded.read()); tmp.close()
         with st.spinner("Analyzing video…"):
-            df_frames, df_events, labeled_path = analyze_video(tmp.name, model)
+            df_frames, df_events, labeled_path, fps = analyze_video(tmp.name, model)
         render_results(df_frames, df_events, labeled_path)
