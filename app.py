@@ -1,10 +1,7 @@
 # app.py — Crowd Guardian (Video only)
-# Premium UI + advanced animated background:
-# - CSS/HTML polish
-# - Aurora gradient canvas + starfield with shooting stars
-# - Session-state persistence so downloads don't clear results
-# - Altair charts, JS confetti
-# - No timeline bar, only a status banner
+# Premium UI: custom HTML/CSS, decorated sidebar, status banner (no timeline bar),
+# Altair charts, JS confetti, animated particles background, and
+# **session_state persistence** so downloads don't "refresh away" your results.
 
 import os
 import cv2
@@ -77,7 +74,6 @@ st.markdown(
           radial-gradient(1000px 420px at 110% -20%, rgba(236,72,153,.14), transparent),
           var(--bg) !important;
       }
-
       header{visibility:hidden;} [data-testid="stToolbar"]{display:none;} #MainMenu{visibility:hidden;} footer{visibility:hidden;}
 
       .cg-hero {
@@ -154,134 +150,43 @@ st.markdown(
 )
 
 # =============================================================================
-# Advanced Animated Background (Aurora + Starfield + Shooting Stars)
+# Background Particles (JS canvas behind page)
 # =============================================================================
 components.html("""
-<div id="cg-bg-wrap">
-  <canvas id="cg-aurora"></canvas>
-  <canvas id="cg-stars"></canvas>
-</div>
+<canvas id="cg-bg"></canvas>
 <style>
-  #cg-bg-wrap{position:fixed; inset:0; z-index:-3; pointer-events:none;}
-  #cg-aurora, #cg-stars {position:absolute; inset:0; width:100%; height:100%;}
+  #cg-bg{position:fixed; inset:0; z-index:-2; background:transparent;}
 </style>
 <script>
-(function(){
-  const aurora = document.getElementById('cg-aurora');
-  const stars  = document.getElementById('cg-stars');
-  const ga = aurora.getContext('2d');
-  const gs = stars.getContext('2d');
+  const c = document.getElementById('cg-bg'), ctx = c.getContext('2d');
+  function resize(){ c.width = innerWidth; c.height = innerHeight; }
+  addEventListener('resize', resize); resize();
 
-  function resize(){
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    [aurora, stars].forEach(c=>{
-      c.width = Math.floor(c.clientWidth * dpr);
-      c.height = Math.floor(c.clientHeight * dpr);
-      const ctx = (c===aurora?ga:gs);
-      ctx.setTransform(dpr,0,0,dpr,0,0);
-    });
-  }
-  window.addEventListener('resize', resize, {passive:true}); resize();
-
-  // ----- Aurora blobs -----
-  const BLOBS = Array.from({length:5}, (_,i)=>({
-    x: Math.random()*aurora.clientWidth,
-    y: Math.random()*aurora.clientHeight*0.8 + 40,
-    r: 140 + Math.random()*220,
-    vx: (-0.4 + Math.random()*0.8),
-    vy: (-0.25 + Math.random()*0.5),
-    hue: 200 + Math.random()*160,
-    a: 0.18 + Math.random()*0.12
+  const N = 120;
+  const P = Array.from({length:N}, () => ({
+    x: Math.random()*c.width,
+    y: Math.random()*c.height,
+    vx: -0.25 + Math.random()*0.5,
+    vy: -0.25 + Math.random()*0.5,
+    s: 0.6 + Math.random()*1.6
   }));
 
-  // ----- Stars -----
-  const N = 140;
-  const dots = Array.from({length:N}, ()=>({
-    x: Math.random()*stars.clientWidth,
-    y: Math.random()*stars.clientHeight,
-    vx: -0.2 + Math.random()*0.4,
-    vy: -0.2 + Math.random()*0.4,
-    s: 0.6 + Math.random()*1.4,
-    tw: Math.random()*Math.PI*2
-  }));
+  function tick(){
+    ctx.clearRect(0,0,c.width,c.height);
+    P.forEach(p=>{
+      p.x += p.vx; p.y += p.vy;
+      if(p.x<0) p.x=c.width; if(p.x>c.width) p.x=0;
+      if(p.y<0) p.y=c.height; if(p.y>c.height) p.y=0;
 
-  let shooting = null;
-  function spawnShooting(){
-    if (shooting) return;
-    const fromTop = Math.random() < 0.5;
-    shooting = {
-      x: Math.random()*stars.clientWidth,
-      y: fromTop? -20 : stars.clientHeight+20,
-      vx: (fromTop? 1.2 : -1.0)*(1.4 + Math.random()*0.9),
-      vy: (fromTop? 0.9 : -1.2)*(1.1 + Math.random()*0.7),
-      life: 80 + Math.random()*70
-    };
-  }
-
-  setInterval(()=>{ if (Math.random()<0.35) spawnShooting(); }, 2000);
-
-  function tickAurora(){
-    ga.clearRect(0,0,aurora.clientWidth, aurora.clientHeight);
-    ga.globalCompositeOperation = 'lighter';
-    BLOBS.forEach(b=>{
-      b.x+=b.vx; b.y+=b.vy;
-      if (b.x < -b.r) b.x = aurora.clientWidth+b.r;
-      if (b.x > aurora.clientWidth+b.r) b.x = -b.r;
-      if (b.y < -b.r) b.y = aurora.clientHeight+b.r;
-      if (b.y > aurora.clientHeight+b.r) b.y = -b.r;
-
-      const grad = ga.createRadialGradient(b.x,b.y,0,b.x,b.y,b.r);
-      const c1 = `hsla(${b.hue}, 90%, 60%, ${b.a})`;
-      const c2 = `hsla(${(b.hue+60)%360}, 90%, 55%, 0)`;
-      grad.addColorStop(0, c1); grad.addColorStop(1, c2);
-
-      ga.fillStyle = grad;
-      ga.beginPath(); ga.arc(b.x,b.y,b.r,0,Math.PI*2); ga.fill();
+      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 6+p.s*2);
+      g.addColorStop(0, 'rgba(255,255,255,0.8)');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(p.x,p.y, 1.2+p.s, 0, Math.PI*2); ctx.fill();
     });
-    requestAnimationFrame(tickAurora);
+    requestAnimationFrame(tick);
   }
-
-  function tickStars(){
-    gs.clearRect(0,0,stars.clientWidth, stars.clientHeight);
-    // subtle space gradient
-    const g = gs.createLinearGradient(0,0,0,stars.clientHeight);
-    g.addColorStop(0, 'rgba(255,255,255,0.02)');
-    g.addColorStop(1, 'rgba(255,255,255,0.01)');
-    gs.fillStyle = g; gs.fillRect(0,0,stars.clientWidth, stars.clientHeight);
-
-    dots.forEach(d=>{
-      d.x += d.vx; d.y += d.vy; d.tw += 0.02;
-      if (d.x<0) d.x=stars.clientWidth; if (d.x>stars.clientWidth) d.x=0;
-      if (d.y<0) d.y=stars.clientHeight; if (d.y>stars.clientHeight) d.y=0;
-
-      const s = d.s + Math.sin(d.tw)*0.4;
-      const rg = gs.createRadialGradient(d.x,d.y,0,d.x,d.y,6+s*1.8);
-      rg.addColorStop(0, 'rgba(255,255,255,0.8)');
-      rg.addColorStop(1, 'rgba(255,255,255,0)');
-      gs.fillStyle = rg;
-      gs.beginPath(); gs.arc(d.x,d.y,1.2+s,0,Math.PI*2); gs.fill();
-    });
-
-    // shooting star
-    if (shooting){
-      shooting.x += shooting.vx; shooting.y += shooting.vy; shooting.life -= 1;
-      gs.strokeStyle = 'rgba(255,255,255,0.75)';
-      gs.lineWidth = 2;
-      gs.beginPath(); gs.moveTo(shooting.x, shooting.y);
-      gs.lineTo(shooting.x - shooting.vx*10, shooting.y - shooting.vy*10);
-      gs.stroke();
-      if (shooting.life <= 0 ||
-          shooting.x < -50 || shooting.x > stars.clientWidth+50 ||
-          shooting.y < -50 || shooting.y > stars.clientHeight+50){
-        shooting = null;
-      }
-    }
-    requestAnimationFrame(tickStars);
-  }
-
-  tickAurora();
-  tickStars();
-})();
+  tick();
 </script>
 """, height=0)
 
@@ -475,7 +380,7 @@ if load_err:
     st.caption(load_err)
 
 # =============================================================================
-# Render Results (with charts + downloads) — used by session persistence & fresh runs
+# (NEW) Re-render persisted results so downloads don't clear the page
 # =============================================================================
 def render_results(df_frames, df_events, labeled_path):
     st.markdown('<h2 class="cg-h2">Results</h2>', unsafe_allow_html=True)
@@ -743,26 +648,8 @@ def analyze_video(
     return df_frames, df_events, playable_path
 
 # =============================================================================
-# Re-render persisted results first (so page looks stable after any rerun)
-# =============================================================================
-if "video_results" in st.session_state:
-    _res = st.session_state["video_results"]
-    render_results(_res["df_frames"], _res["df_events"], _res["labeled_path"])
-
-# =============================================================================
 # Run
 # =============================================================================
-if st.button("Analyze") if False else False:  # placeholder to keep layout consistent if needed
-    pass
-
-uploaded = st.file_uploader(
-    "Drag & drop a video (MP4, MOV, MKV, AVI, MPEG4) or browse",
-    type=["mp4","mov","mkv","avi","mpeg4"],
-    label_visibility="collapsed",
-    key="uploader_main"
-)
-go = st.button("Analyze", key="analyze_btn")
-
 if go:
     if not model:
         st.error("Model not loaded.")
@@ -774,7 +661,7 @@ if go:
         with st.spinner("Analyzing video…"):
             df_frames, df_events, labeled_path = analyze_video(tmp.name, model)
 
-        # Persist results so any rerun (e.g., downloads) keeps the view
+        # -------- Persist results so any rerun (e.g., downloads) keeps the view --------
         st.session_state["video_results"] = {
             "df_frames": df_frames,
             "df_events": df_events,
