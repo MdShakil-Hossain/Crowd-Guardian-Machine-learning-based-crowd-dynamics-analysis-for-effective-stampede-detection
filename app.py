@@ -150,7 +150,7 @@ st.markdown(
 )
 
 # =============================================================================
-# Background Particles (JS canvas behind page)
+# Background Particles (JS canvas behind page) — enhanced
 # =============================================================================
 components.html("""
 <canvas id="cg-bg"></canvas>
@@ -158,35 +158,150 @@ components.html("""
   #cg-bg{position:fixed; inset:0; z-index:-2; background:transparent;}
 </style>
 <script>
-  const c = document.getElementById('cg-bg'), ctx = c.getContext('2d');
-  function resize(){ c.width = innerWidth; c.height = innerHeight; }
-  addEventListener('resize', resize); resize();
+  // Canvas setup with HiDPI support
+  const c = document.getElementById('cg-bg'), ctx = c.getContext('2d', { alpha: true });
+  let DPR = Math.min(window.devicePixelRatio || 1, 2);
+  function resize(){
+    c.width  = innerWidth * DPR;
+    c.height = innerHeight * DPR;
+    c.style.width = innerWidth + 'px';
+    c.style.height = innerHeight + 'px';
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0); // draw in CSS pixels
+  }
+  addEventListener('resize', resize, {passive:true}); resize();
 
-  const N = 120;
-  const P = Array.from({length:N}, () => ({
-    x: Math.random()*c.width,
-    y: Math.random()*c.height,
-    vx: -0.25 + Math.random()*0.5,
-    vy: -0.25 + Math.random()*0.5,
-    s: 0.6 + Math.random()*1.6
+  // Helpers
+  const rand=(a,b)=>a+Math.random()*(b-a);
+  const TAU=Math.PI*2;
+
+  // -------- Layer A: soft "dust" particles with twinkle --------
+  const DUST_COUNT = 160;
+  const dust = Array.from({length:DUST_COUNT}, () => ({
+    x: Math.random()*innerWidth,
+    y: Math.random()*innerHeight,
+    vx: rand(-0.30, 0.30),
+    vy: rand(-0.30, 0.30),
+    r: rand(0.8, 2.2),
+    t: rand(0, TAU),
+    tw: rand(0.002, 0.007) // twinkle speed
   }));
 
-  function tick(){
-    ctx.clearRect(0,0,c.width,c.height);
-    P.forEach(p=>{
-      p.x += p.vx; p.y += p.vy;
-      if(p.x<0) p.x=c.width; if(p.x>c.width) p.x=0;
-      if(p.y<0) p.y=c.height; if(p.y>c.height) p.y=0;
+  // -------- Layer B: connecting lines between close particles --------
+  const LINK_DIST = 90; // px
 
-      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 6+p.s*2);
-      g.addColorStop(0, 'rgba(255,255,255,0.8)');
+  // -------- Layer C: slow gradient "nebula" blobs (parallax feel) --------
+  const COLORS = ['#ef4444','#f97316','#60a5fa']; // Tailwind-ish reds/orange/blue
+  const blobs = Array.from({length:3}, (_,i)=>({
+    x: rand(0, innerWidth),
+    y: rand(0, innerHeight),
+    vx: rand(-0.06, 0.06),
+    vy: rand(-0.06, 0.06),
+    r: rand(160, 280),
+    color: COLORS[i % COLORS.length]
+  }));
+
+  // -------- Layer D: occasional shooting stars --------
+  const stars = [];
+  let lastStarAt = 0;
+  function spawnStar(){
+    const y = rand(0, innerHeight*0.6);
+    stars.push({
+      x: -50, y,
+      vx: rand(6, 9),
+      vy: rand(-1, 1),
+      life: 0,
+      ttl: rand(60, 100),
+      len: rand(80, 140)
+    });
+  }
+
+  // -------- Animation loop --------
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+
+  function tick(ts){
+    // clear (CSS pixel space thanks to setTransform)
+    ctx.clearRect(0, 0, innerWidth, innerHeight);
+
+    // --- draw gradient blobs (additive blending) ---
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    blobs.forEach(b=>{
+      b.x += b.vx; b.y += b.vy;
+      // wrap
+      const R = b.r;
+      if (b.x < -R) b.x = innerWidth + R;
+      if (b.x > innerWidth + R) b.x = -R;
+      if (b.y < -R) b.y = innerHeight + R;
+      if (b.y > innerHeight + R) b.y = -R;
+
+      const g = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, R);
+      // soft glow from center to transparent
+      g.addColorStop(0.0, b.color + '33'); // ~20% alpha
+      g.addColorStop(1.0, b.color + '00');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(b.x, b.y, R, 0, TAU); ctx.fill();
+    });
+    ctx.restore();
+
+    // --- update dust points ---
+    dust.forEach(p=>{
+      p.x += p.vx; p.y += p.vy; p.t += p.tw;
+      if (p.x < 0) p.x = innerWidth;  if (p.x > innerWidth)  p.x = 0;
+      if (p.y < 0) p.y = innerHeight; if (p.y > innerHeight) p.y = 0;
+    });
+
+    // --- connecting lines (distance-faded) ---
+    ctx.save();
+    for (let i=0;i<dust.length;i++){
+      const a = dust[i];
+      for (let j=i+1;j<dust.length;j++){
+        const b = dust[j];
+        const dx=a.x-b.x, dy=a.y-b.y;
+        const d2 = dx*dx + dy*dy;
+        if (d2 < LINK_DIST*LINK_DIST){
+          const alpha = 1 - Math.sqrt(d2)/LINK_DIST;
+          ctx.globalAlpha = alpha * 0.25; // subtle
+          ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+        }
+      }
+    }
+    ctx.restore();
+
+    // --- draw dust with twinkle glow ---
+    dust.forEach(p=>{
+      const s = p.r * (1 + 0.35*Math.sin(p.t));
+      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 8 + s*2);
+      g.addColorStop(0, 'rgba(255,255,255,0.95)');
       g.addColorStop(1, 'rgba(255,255,255,0)');
       ctx.fillStyle = g;
-      ctx.beginPath(); ctx.arc(p.x,p.y, 1.2+p.s, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(p.x, p.y, 1.2 + s, 0, TAU); ctx.fill();
     });
+
+    // --- shooting stars (rare, additive) ---
+    if (ts - lastStarAt > 2500 && Math.random() < 0.05) { // ~ every few secs
+      spawnStar(); lastStarAt = ts;
+    }
+    for (let i = stars.length - 1; i >= 0; i--) {
+      const s = stars[i];
+      s.x += s.vx; s.y += s.vy; s.life++;
+      const fade = 1 - s.life / s.ttl;
+
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = Math.max(0, fade);
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y);
+      ctx.lineTo(s.x - s.len, s.y - s.len*0.25);
+      ctx.stroke();
+      ctx.restore();
+
+      if (s.life > s.ttl || s.x > innerWidth + 150) stars.splice(i, 1);
+    }
+
     requestAnimationFrame(tick);
   }
-  tick();
+  requestAnimationFrame(tick);
 </script>
 """, height=0)
 
@@ -372,7 +487,7 @@ except Exception as e:
     load_err = str(e)
 
 st.markdown(
-    f'<div class="cg-center"><span class="pill {"ok" if model and not load_err else "err"}">'
+    f'<div class="cg-center"><span class="pill {"ok" if model and not load_err else "err"}'>
     f'{"Model loaded" if model and not load_err else "Model error"}</span></div>',
     unsafe_allow_html=True,
 )
