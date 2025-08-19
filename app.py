@@ -362,75 +362,6 @@ def transcode_to_h264(src_path: str, dst_path: str, fps: float):
     ok = (proc.returncode == 0) and os.path.exists(dst_path) and os.path.getsize(dst_path) > 0
     return (dst_path if ok else src_path), ok, (proc.stderr or "")
 
-# ---------- SHAP helpers ----------
-def _extract_frame_at_time(video_path: str, time_sec: float):
-    """Return BGR frame at given time, or None."""
-    if not os.path.exists(video_path):
-        return None
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        return None
-    fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
-    if fps > 0:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, int(max(0, round(time_sec * fps))))
-    else:
-        cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, time_sec * 1000.0))
-    ok, frame = cap.read()
-    cap.release()
-    if not ok or frame is None or getattr(frame, "size", 0) == 0:
-        return None
-    return frame
-
-def _compute_shap_mask(model, gray_100x100):
-    """
-    Compute a SHAP saliency mask for a single grayscale (100x100) frame.
-    Returns normalized mask in [0,1] with shape (100,100).
-    """
-    try:
-        import shap
-        import tensorflow as tf
-    except Exception as e:
-        raise RuntimeError(f"SHAP is not available: {e}")
-
-    x = gray_100x100.astype("float32") / 255.0
-    x = np.expand_dims(x, axis=(0, -1))  # (1,100,100,1)
-
-    # Simple constant background (mid-gray)
-    background = np.zeros_like(x) + 0.5
-
-    try:
-        explainer = shap.GradientExplainer(model, background)
-        sv = explainer.shap_values(x)
-    except Exception:
-        # Fallback to DeepExplainer if GradientExplainer fails
-        explainer = shap.DeepExplainer(model, background)
-        sv = explainer.shap_values(x)
-
-    sv_arr = sv[0] if isinstance(sv, list) else sv  # (1,100,100,1) or similar
-    sv_arr = np.squeeze(sv_arr)                     # -> (100,100) or (100,100,1)
-    if sv_arr.ndim == 3:
-        sv_arr = sv_arr[..., 0]
-    sv_arr = np.nan_to_num(sv_arr, nan=0.0, posinf=0.0, neginf=0.0)
-    # Normalize to [0,1] without using deprecated ndarray.ptp
-    min_v = float(np.min(sv_arr))
-    max_v = float(np.max(sv_arr))
-    denom = (max_v - min_v) if (max_v - min_v) != 0 else 1.0
-    norm = (sv_arr - min_v) / denom
-    return norm.astype("float32")  # (100,100) in [0,1]
-
-def _overlay_mask_on_frame(frame_bgr, mask_100):
-    """
-    Upscale mask to frame size and overlay as heatmap. Returns blended BGR image.
-    """
-    if frame_bgr is None or getattr(frame_bgr, "size", 0) == 0:
-        return None
-    H, W = frame_bgr.shape[:2]
-    mask = cv2.resize(mask_100, (W, H), interpolation=cv2.INTER_CUBIC)
-    mask_u8 = np.clip(mask * 255.0, 0, 255).astype(np.uint8)
-    heat = cv2.applyColorMap(mask_u8, cv2.COLORMAP_JET)
-    blend = cv2.addWeighted(frame_bgr, 0.65, heat, 0.35, 0)
-    return blend
-
 # =============================================================================
 # Load model (silent) + status
 # =============================================================================
@@ -567,48 +498,6 @@ def render_results(df_frames, df_events, labeled_path):
     if os.path.exists(labeled_path): st.video(labeled_path)
     else: st.info("Preview unavailable.")
 
-    # ===================== SHAP hot spots (NEW) =====================
-    st.markdown('<h2 class="cg-h2">Explanations — SHAP hot spots</h2>', unsafe_allow_html=True)
-    if df_events.empty:
-        st.info("No events to explain.")
-        return
-
-    # Take the first detected interval
-    row = df_events.iloc[0]
-    start_t = float(row["start_time_sec"])
-    end_t   = float(row["end_time_sec"])
-    t_mid   = 0.5 * (start_t + end_t)
-
-    # SAFE extract (avoid boolean evaluations on numpy arrays)
-    frame_for_shap = _extract_frame_at_time(labeled_path, t_mid)
-    if frame_for_shap is None or getattr(frame_for_shap, "size", 0) == 0:
-        frame_for_shap = _extract_frame_at_time(labeled_path, start_t)
-
-    if frame_for_shap is None or getattr(frame_for_shap, "size", 0) == 0:
-        st.warning("Could not extract a valid frame for SHAP visualization.")
-        return
-
-    try:
-        # Prepare grayscale 100x100 exactly like model input
-        gray = cv2.cvtColor(frame_for_shap, cv2.COLOR_BGR2GRAY)
-        g100 = cv2.resize(gray, (100,100), interpolation=cv2.INTER_AREA)
-
-        mask = _compute_shap_mask(model, g100)   # (100,100) in [0,1]
-        blended = _overlay_mask_on_frame(frame_for_shap, mask)
-        if blended is None:
-            raise RuntimeError("Overlay failed (empty frame).")
-
-        cA, cB = st.columns(2)
-        with cA:
-            st.caption(f"Frame @ {sec_to_tc(t_mid)} (mid of first event)")
-            st.image(cv2.cvtColor(frame_for_shap, cv2.COLOR_BGR2RGB), use_column_width=True)
-        with cB:
-            st.caption("SHAP heatmap overlay (model focus)")
-            st.image(cv2.cvtColor(blended, cv2.COLOR_BGR2RGB), use_column_width=True)
-
-    except Exception as e:
-        st.info(f"SHAP explanation skipped: {e}")
-
 # ---- Re-render results from session on EVERY run (prevents ‘refresh’ loss)
 if "video_results" in st.session_state:
     _res = st.session_state["video_results"]
@@ -693,7 +582,7 @@ def analyze_video(
             else:
                 delta = prev_count - curr_count
                 r = (prev_count - curr_count) / max(1, prev_count)
-                y_heads = 1 if (delta >= ABS_DROP or r >= REL_DROP) else 0
+                y_heads = 1 if (delta >= abs_drop or r >= rel_drop) else 0
 
             x = preprocess_for_cnn(gray)
             p_cnn = float(model.predict(x, verbose=0)[0][0])
@@ -781,3 +670,4 @@ if go:
 
         # Render now
         render_results(df_frames, df_events, labeled_path)
+
