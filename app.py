@@ -1,5 +1,7 @@
-# app.py — Crowd Guardian (Video only) + SHAP hot spots
-# Premium UI kept intact. Adds: SHAP explanations for first detected event frame.
+# app.py — Crowd Guardian (Video only)
+# Premium UI: custom HTML/CSS, decorated sidebar, status banner (no timeline bar),
+# Altair charts, JS confetti, animated particles background, and
+# **session_state persistence** so downloads don't "refresh away" your results.
 
 import os
 import cv2
@@ -17,18 +19,6 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import urllib.request, hashlib
 import streamlit.components.v1 as components
-
-# ===== NEW: SHAP + TF (safe import) =====
-HAVE_SHAP, SHAP_IMPORT_ERR = True, ""
-try:
-    import shap  # pin 0.46.0 in requirements
-except Exception as _e:
-    HAVE_SHAP, SHAP_IMPORT_ERR = False, str(_e)
-
-try:
-    import tensorflow as tf
-except Exception:
-    tf = None  # handled later
 
 # =============================================================================
 # App config
@@ -68,56 +58,91 @@ st.markdown(
     """
     <style>
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-      :root{ --bg:#0a0f1a; --panel:#0e1526; --panel2:#101826;
+      :root{
+        --bg:#0a0f1a; --panel:#0e1526; --panel2:#101826;
         --muted:rgba(148,163,184,.35); --muted2:rgba(148,163,184,.18);
-        --text:#e6e9ef; --accent:#ef4444; --accent2:#f97316; }
-      html, body, [class*="css"] { font-family:'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif!important; color:var(--text);}
-      .main .block-container {max-width: 1080px; padding-top:.6rem; padding-bottom:2rem;}
-      body { background:
-        radial-gradient(1000px 380px at -10% -15%, rgba(99,102,241,.16), transparent),
-        radial-gradient(1000px 420px at 110% -20%, rgba(236,72,153,.14), transparent),
-        var(--bg)!important; }
+        --text:#e6e9ef; --accent:#ef4444; --accent2:#f97316;
+      }
+      html, body, [class*="css"] {
+        font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif !important;
+        color: var(--text);
+      }
+      .main .block-container {max-width: 1080px; padding-top: .6rem; padding-bottom: 2rem;}
+      body {
+        background:
+          radial-gradient(1000px 380px at -10% -15%, rgba(99,102,241,.16), transparent),
+          radial-gradient(1000px 420px at 110% -20%, rgba(236,72,153,.14), transparent),
+          var(--bg) !important;
+      }
       header{visibility:hidden;} [data-testid="stToolbar"]{display:none;} #MainMenu{visibility:hidden;} footer{visibility:hidden;}
 
-      .cg-hero { margin-top:8px; padding:30px 32px; border-radius:20px; border:1px solid var(--muted2);
-        background: radial-gradient(1200px 420px at 0% -10%, rgba(59,130,246,.16), transparent),
-        linear-gradient(180deg, rgba(17,24,39,.55), rgba(2,6,23,.45)); text-align:center; box-shadow:0 10px 30px rgba(0,0,0,.25); }
-      .cg-title {font-size:2.75rem; line-height:1.08; margin:0 0 .35rem 0; letter-spacing:.1px;}
-      .cg-subtle {opacity:.95; margin:0; font-size:1.08rem;}
+      .cg-hero {
+        margin-top: 8px; padding: 30px 32px; border-radius: 20px;
+        border: 1px solid var(--muted2);
+        background:
+          radial-gradient(1200px 420px at 0% -10%, rgba(59,130,246,.16), transparent),
+          linear-gradient(180deg, rgba(17,24,39,.55), rgba(2,6,23,.45));
+        text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,.25);
+      }
+      .cg-title  {font-size: 2.75rem; line-height: 1.08; margin: 0 0 .35rem 0; letter-spacing:.1px;}
+      .cg-subtle {opacity:.95; margin:0; font-size: 1.08rem;}
+
       .cg-h2 {text-align:center; margin: 1.1rem 0 .7rem 0; font-size:1.35rem;}
-      .cg-card {border:1px solid var(--muted2); border-radius:16px; padding:14px 16px;
-                background: rgba(15,23,42,.45); box-shadow:0 10px 30px rgba(0,0,0,.25);}
+      .cg-card {border: 1px solid var(--muted2); border-radius: 16px; padding: 14px 16px;
+                background: rgba(15,23,42,.45); box-shadow: 0 10px 30px rgba(0,0,0,.25);}
+
       .cg-center {display:flex; justify-content:center; margin-top:.6rem;}
       .pill {display:inline-block; padding:3px 12px; border-radius:999px; font-size:12px;
              border:1px solid var(--muted); background: rgba(30,41,59,.55)}
-      .ok{background:rgba(16,185,129,.18); color:#a7f3d0; border-color:rgba(16,185,129,.35)}
-      .err{background:rgba(239,68,68,.18); color:#fecaca; border-color:rgba(239,68,68,.35)}
-      .stButton>button { width:100%; padding:12px 14px; border-radius:12px; font-weight:700; border:0; color:#fff;
-        background:linear-gradient(90deg, var(--accent), var(--accent2)); box-shadow:0 8px 24px rgba(249,115,22,.35);}
-      .stButton>button:hover {filter:brightness(1.07)}
-      [data-testid="stSidebar"] {min-width:330px; max-width:360px; border-right:1px solid var(--muted2);}
-      [data-testid="stSidebar"] > div:first-child { background:linear-gradient(180deg, var(--panel) 0%, var(--panel2) 60%, #182234 100%); color:var(--text);}
-      .sb-brand { font-weight:700; font-size:1.10rem; letter-spacing:.2px; margin:12px 14px 10px 14px; }
-      .sb-card { border:1px solid rgba(255,255,255,.08); background:rgba(255,255,255,.04);
-                 border-radius:14px; padding:12px 14px; margin:12px; }
+      .ok   {background: rgba(16,185,129,.18); color:#a7f3d0; border-color: rgba(16,185,129,.35)}
+      .err  {background: rgba(239,68,68,.18); color:#fecaca; border-color: rgba(239,68,68,.35)}
+
+      .stButton>button {
+        width: 100%; padding: 12px 14px; border-radius: 12px; font-weight: 700; border: 0; color: #fff;
+        background: linear-gradient(90deg, var(--accent), var(--accent2));
+        box-shadow: 0 8px 24px rgba(249,115,22,.35);
+      }
+      .stButton>button:hover {filter: brightness(1.07)}
+
+      [data-testid="stSidebar"] {min-width: 330px; max-width: 360px; border-right: 1px solid var(--muted2);}
+      [data-testid="stSidebar"] > div:first-child {
+        background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 60%, #182234 100%); color: var(--text);
+      }
+      .sb-brand { font-weight: 700; font-size: 1.10rem; letter-spacing:.2px; margin: 12px 14px 10px 14px; }
+
+      .sb-card { border:1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.04);
+                 border-radius: 14px; padding: 12px 14px; margin: 12px; }
       .sb-small {font-size:12px; opacity:.85;}
       .sb-card ul, .sb-card ol {padding-left: 1.05rem; margin: .25rem 0 0 0;}
       .sb-card li {margin-bottom: 6px;}
-      .capstone-badge { display:inline-flex; align-items:center; gap:8px; margin-bottom:10px;
-        background:linear-gradient(90deg, rgba(239,68,68,.18), rgba(249,115,22,.18));
-        border:1px solid rgba(249,115,22,.35); color:#ffd7c2; padding:6px 10px; border-radius:999px; font-size:12px; }
+
+      .capstone-badge {
+        display:inline-flex; align-items:center; gap:8px; margin-bottom:10px;
+        background: linear-gradient(90deg, rgba(239,68,68,.18), rgba(249,115,22,.18));
+        border:1px solid rgba(249,115,22,.35); color:#ffd7c2; padding:6px 10px; border-radius:999px; font-size:12px;
+      }
       .capstone-grid { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-      .cap-card { border:1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.03); border-radius: 12px; padding: 10px 12px; }
-      .cap-title {font-weight:700; margin-bottom:6px;} .cap-kv {font-size: 13px; line-height: 1.25rem;}
-      .cap-name {font-weight:600;} .cap-id {opacity:.85;} .divider{height:1px; background:rgba(255,255,255,.06); margin:10px 0;}
-      .status-banner{ display:flex; align-items:center; justify-content:center; gap:10px; height:52px; border-radius:12px; margin:12px 0;
-        font-weight:800; letter-spacing:.3px; text-transform:uppercase; border:1px solid rgba(255,255,255,.10);
-        box-shadow: 0 6px 18px rgba(0,0,0,.25);}
+      .cap-card { border:1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.03);
+                  border-radius: 12px; padding: 10px 12px; }
+      .cap-title {font-weight:700; margin-bottom:6px;}
+      .cap-kv {font-size: 13px; line-height: 1.25rem;}
+      .cap-name {font-weight:600;}
+      .cap-id {opacity:.85;}
+      .divider {height:1px; background:rgba(255,255,255,.06); margin:10px 0;}
+
+      .status-banner{
+        display:flex; align-items:center; justify-content:center;
+        gap:10px; height:52px; border-radius:12px; margin:12px 0;
+        font-weight:800; letter-spacing:.3px; text-transform:uppercase;
+        border:1px solid rgba(255,255,255,.10);
+        box-shadow: 0 6px 18px rgba(0,0,0,.25);
+      }
       .status-dot{width:10px; height:10px; border-radius:50%; display:inline-block; box-shadow:0 0 0 3px rgba(255,255,255,.06) inset;}
-      .status-ok{  background:linear-gradient(90deg, rgba(239,68,68,.22), rgba(249,115,22,.22)); color:#ffe5d5;}
-      .status-safe{background:linear-gradient(90deg, rgba(16,185,129,.22), rgba(59,130,246,.22)); color:#dcfce7;}
+      .status-ok{  background: linear-gradient(90deg, rgba(239,68,68,.22), rgba(249,115,22,.22)); color:#ffe5d5; }
+      .status-safe{background: linear-gradient(90deg, rgba(16,185,129,.22), rgba(59,130,246,.22)); color:#dcfce7; }
       .status-ok .status-dot{background:#ef4444;} .status-safe .status-dot{background:#10b981;}
-      .stDataFrame{border-radius:10px; overflow:hidden; border:1px solid var(--muted2);}
+
+      .stDataFrame {border-radius: 10px; overflow:hidden; border:1px solid var(--muted2);}
       [data-testid="stFileUploadDropzone"]{ margin-top: 0 !important; }
     </style>
     """,
@@ -129,27 +154,39 @@ st.markdown(
 # =============================================================================
 components.html("""
 <canvas id="cg-bg"></canvas>
-<style>#cg-bg{position:fixed; inset:0; z-index:-2; background:transparent;}</style>
+<style>
+  #cg-bg{position:fixed; inset:0; z-index:-2; background:transparent;}
+</style>
 <script>
   const c = document.getElementById('cg-bg'), ctx = c.getContext('2d');
   function resize(){ c.width = innerWidth; c.height = innerHeight; }
   addEventListener('resize', resize); resize();
+
   const N = 120;
-  const P = Array.from({length:N}, () => ({ x: Math.random()*c.width,
-    y: Math.random()*c.height, vx: -0.25 + Math.random()*0.5,
-    vy: -0.25 + Math.random()*0.5, s: 0.6 + Math.random()*1.6 }));
+  const P = Array.from({length:N}, () => ({
+    x: Math.random()*c.width,
+    y: Math.random()*c.height,
+    vx: -0.25 + Math.random()*0.5,
+    vy: -0.25 + Math.random()*0.5,
+    s: 0.6 + Math.random()*1.6
+  }));
+
   function tick(){
     ctx.clearRect(0,0,c.width,c.height);
     P.forEach(p=>{
       p.x += p.vx; p.y += p.vy;
       if(p.x<0) p.x=c.width; if(p.x>c.width) p.x=0;
       if(p.y<0) p.y=c.height; if(p.y>c.height) p.y=0;
-      const g = ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,6+p.s*2);
-      g.addColorStop(0,'rgba(255,255,255,0.8)'); g.addColorStop(1,'rgba(255,255,255,0)');
-      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x,p.y,1.2+p.s,0,Math.PI*2); ctx.fill();
+
+      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 6+p.s*2);
+      g.addColorStop(0, 'rgba(255,255,255,0.8)');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(p.x,p.y, 1.2+p.s, 0, Math.PI*2); ctx.fill();
     });
     requestAnimationFrame(tick);
-  } tick();
+  }
+  tick();
 </script>
 """, height=0)
 
@@ -160,9 +197,11 @@ with st.sidebar:
     st.markdown('<div class="sb-brand">🛡️ Crowd Guardian</div>', unsafe_allow_html=True)
     st.markdown(
         """
-        <div class="sb-card"><b>Overview</b><br/>
-        Detect potential stampede intervals in crowd videos by combining a CNN on grayscale frames
-        with a head-count drop heuristic and event aggregation.</div>
+        <div class="sb-card">
+          <b>Overview</b><br/>
+          Detect potential stampede intervals in crowd videos by combining a CNN on grayscale frames
+          with a head-count drop heuristic and event aggregation.
+        </div>
         """, unsafe_allow_html=True
     )
     st.markdown(
@@ -193,7 +232,8 @@ with st.sidebar:
           <div class="divider"></div>
           <div class="sb-small">This application demonstrates ML-assisted analysis of crowd dynamics with visual evidence and interval summaries.</div>
         </div>
-        """, unsafe_allow_html=True
+        """,
+        unsafe_allow_html=True
     )
     st.markdown(
         """
@@ -208,7 +248,8 @@ with st.sidebar:
         """, unsafe_allow_html=True
     )
     try:
-        tf_ver = tf.__version__ if tf else "not loaded"
+        import tensorflow as tf
+        tf_ver = tf.__version__
     except Exception:
         tf_ver = "not loaded"
     st.markdown(
@@ -220,8 +261,10 @@ with st.sidebar:
 # Hero
 # =============================================================================
 st.markdown(
-    '<div class="cg-hero"><div class="cg-title">Crowd Guardian</div>'
-    '<div class="cg-subtle">Machine learning based crowd dynamics analysis for effective stampede detection</div></div>',
+    '<div class="cg-hero">'
+    '<div class="cg-title">Crowd Guardian</div>'
+    '<div class="cg-subtle">Machine learning based crowd dynamics analysis for effective stampede detection</div>'
+    '</div>',
     unsafe_allow_html=True,
 )
 
@@ -244,8 +287,7 @@ def _download_to_cache(url: str) -> str:
 
 @st.cache_resource(show_spinner=False)
 def load_cnn(path_or_url: str):
-    if tf is None:
-        raise RuntimeError("TensorFlow not available")
+    import tensorflow as tf
     if path_or_url.startswith(("http://", "https://")):
         local = _download_to_cache(path_or_url)
     else:
@@ -320,6 +362,75 @@ def transcode_to_h264(src_path: str, dst_path: str, fps: float):
     ok = (proc.returncode == 0) and os.path.exists(dst_path) and os.path.getsize(dst_path) > 0
     return (dst_path if ok else src_path), ok, (proc.stderr or "")
 
+# ---------- SHAP helpers ----------
+def _extract_frame_at_time(video_path: str, time_sec: float):
+    """Return BGR frame at given time, or None."""
+    if not os.path.exists(video_path):
+        return None
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return None
+    fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+    if fps > 0:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(max(0, round(time_sec * fps))))
+    else:
+        cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, time_sec * 1000.0))
+    ok, frame = cap.read()
+    cap.release()
+    if not ok or frame is None or getattr(frame, "size", 0) == 0:
+        return None
+    return frame
+
+def _compute_shap_mask(model, gray_100x100):
+    """
+    Compute a SHAP saliency mask for a single grayscale (100x100) frame.
+    Returns normalized mask in [0,1] with shape (100,100).
+    """
+    try:
+        import shap
+        import tensorflow as tf
+    except Exception as e:
+        raise RuntimeError(f"SHAP is not available: {e}")
+
+    x = gray_100x100.astype("float32") / 255.0
+    x = np.expand_dims(x, axis=(0, -1))  # (1,100,100,1)
+
+    # Simple constant background (mid-gray)
+    background = np.zeros_like(x) + 0.5
+
+    try:
+        explainer = shap.GradientExplainer(model, background)
+        sv = explainer.shap_values(x)
+    except Exception:
+        # Fallback to DeepExplainer if GradientExplainer fails
+        explainer = shap.DeepExplainer(model, background)
+        sv = explainer.shap_values(x)
+
+    sv_arr = sv[0] if isinstance(sv, list) else sv  # (1,100,100,1) or similar
+    sv_arr = np.squeeze(sv_arr)                     # -> (100,100) or (100,100,1)
+    if sv_arr.ndim == 3:
+        sv_arr = sv_arr[..., 0]
+    sv_arr = np.nan_to_num(sv_arr, nan=0.0, posinf=0.0, neginf=0.0)
+    # Normalize to [0,1] without using deprecated ndarray.ptp
+    min_v = float(np.min(sv_arr))
+    max_v = float(np.max(sv_arr))
+    denom = (max_v - min_v) if (max_v - min_v) != 0 else 1.0
+    norm = (sv_arr - min_v) / denom
+    return norm.astype("float32")  # (100,100) in [0,1]
+
+def _overlay_mask_on_frame(frame_bgr, mask_100):
+    """
+    Upscale mask to frame size and overlay as heatmap. Returns blended BGR image.
+    """
+    if frame_bgr is None or getattr(frame_bgr, "size", 0) == 0:
+        return None
+    H, W = frame_bgr.shape[:2]
+    mask = cv2.resize(mask_100, (W, H), interpolation=cv2.INTER_CUBIC)
+    mask_u8 = np.clip(mask * 255.0, 0, 255).astype(np.uint8)
+    heat = cv2.applyColorMap(mask_u8, cv2.COLORMAP_JET)
+    blend = cv2.addWeighted(frame_bgr, 0.65, heat, 0.35, 0)
+    return blend
+
 # =============================================================================
 # Load model (silent) + status
 # =============================================================================
@@ -336,82 +447,6 @@ st.markdown(
 )
 if load_err:
     st.caption(load_err)
-
-# =============================================================================
-# (NEW) SHAP utilities — robust & NumPy 2 safe
-# =============================================================================
-def _safe_norm01(arr: np.ndarray) -> np.ndarray:
-    # NumPy 2.0-safe min/max/ptp normalizer
-    a_min = float(np.min(arr))
-    a_max = float(np.max(arr))
-    rng = a_max - a_min if (a_max - a_min) != 0 else 1.0
-    return (arr - a_min) / rng
-
-@st.cache_resource(show_spinner=False)
-def _build_shap_explainer(_model):
-    # Background of zeros; for stability add a couple of low-noise samples
-    bg = np.zeros((8, 100, 100, 1), dtype=np.float32)
-    bg += np.random.normal(0, 0.01, bg.shape).astype(np.float32)
-    return shap.GradientExplainer(_model, bg)
-
-def _extract_frame_at_time(video_path: str, t_sec: float):
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        return None
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    idx = max(0, int(round(t_sec * fps)))
-    cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-    ok, frame = cap.read()
-    cap.release()
-    return frame if ok and frame is not None and frame.size > 0 else None
-
-def shap_overlay_for_frame(model, frame_bgr, q=0.90):
-    """Return overlay image + boxes using SHAP (fallback to gradients if SHAP not available)."""
-    H, W = frame_bgr.shape[:2]
-    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-    x = preprocess_for_cnn(gray)  # (1,100,100,1)
-
-    # Compute contribution map
-    contrib = None
-    if HAVE_SHAP:
-        try:
-            explainer = _build_shap_explainer(model)
-            shap_vals = explainer.shap_values(x)
-            sv = shap_vals[0] if isinstance(shap_vals, (list, tuple)) else shap_vals
-            contrib = sv[0, :, :, 0]  # (100,100)
-        except Exception as e:
-            st.info(f"SHAP explanation fallback (Gradient) due to: {e}")
-    if contrib is None:
-        # Fallback: simple input*gradient saliency
-        with tf.GradientTape() as tape:
-            xx = tf.convert_to_tensor(x)
-            tape.watch(xx)
-            y = model(xx, training=False)
-        grads = tape.gradient(y, xx).numpy()[0, :, :, 0]
-        contrib = grads * x[0, :, :, 0]  # (100,100)
-
-    contrib = np.abs(contrib)
-    contrib = _safe_norm01(contrib)
-    heat = cv2.resize(contrib, (W, H), interpolation=cv2.INTER_LINEAR)
-
-    # Build overlay
-    heat_u8 = (heat * 255).astype(np.uint8)
-    heat_color = cv2.applyColorMap(heat_u8, cv2.COLORMAP_JET)
-    overlay = cv2.addWeighted(frame_bgr, 0.6, heat_color, 0.4, 0)
-
-    # Boxes from top-q quantile
-    thr = float(np.quantile(heat, q))
-    mask = (heat >= thr).astype(np.uint8) * 255
-    mask = cv2.dilate(mask, np.ones((5,5), np.uint8), iterations=1)
-    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    boxes = []
-    min_area = int(0.001 * W * H)
-    for c in cnts:
-        x, y, w, h = cv2.boundingRect(c)
-        if w * h < min_area: continue
-        boxes.append((x, y, w, h))
-        cv2.rectangle(overlay, (x, y), (x+w, y+h), (0, 255, 255), 2)
-    return overlay, boxes
 
 # =============================================================================
 # (NEW) Re-render persisted results so downloads don't clear the page
@@ -432,20 +467,39 @@ def render_results(df_frames, df_events, labeled_path):
     if total_events > 0:
         components.html("""
         <canvas id="c"></canvas>
-        <style>#c{position:relative;width:100%;height:140px;display:block;border-radius:12px;margin:6px 0 4px 0;
-        background:linear-gradient(90deg, rgba(16,185,129,.18), rgba(239,68,68,.18));}</style>
+        <style>
+          #c{position:relative;width:100%;height:140px;display:block;border-radius:12px;margin:6px 0 4px 0;
+             background:linear-gradient(90deg, rgba(16,185,129,.18), rgba(239,68,68,.18));}
+        </style>
         <script>
-          const canvas=document.getElementById('c'),ctx=canvas.getContext('2d');
-          function resize(){canvas.width=canvas.clientWidth;canvas.height=140;} window.addEventListener('resize',resize); resize();
-          const conf=[]; function spawn(){for(let i=0;i<50;i++){conf.push({x:Math.random()*canvas.width,y:-10-Math.random()*30,
-          vx:(Math.random()-0.5)*1.5,vy:1+Math.random()*2.5,s:2+Math.random()*3,a:Math.random()*Math.PI});}} spawn();
-          function tick(){ctx.clearRect(0,0,canvas.width,canvas.height); conf.forEach(p=>{p.x+=p.vx;p.y+=p.vy;p.a+=0.1;
-          ctx.save();ctx.translate(p.x,p.y);ctx.rotate(p.a);ctx.fillStyle=['#ef4444','#f97316','#10b981','#60a5fa'][Math.floor(Math.random()*4)];
-          ctx.fillRect(-p.s/2,-p.s/2,p.s,p.s*2);ctx.restore();}); requestAnimationFrame(tick);} tick(); setTimeout(()=>{spawn()},600);
+          const canvas = document.getElementById('c');
+          const ctx = canvas.getContext('2d');
+          function resize(){canvas.width=canvas.clientWidth; canvas.height=140;}
+          window.addEventListener('resize', resize); resize();
+          const confetti = [];
+          function spawn(){for(let i=0;i<50;i++){confetti.push({
+            x: Math.random()*canvas.width, y: -10 - Math.random()*30,
+            vx: (Math.random()-0.5)*1.5, vy: 1+Math.random()*2.5,
+            s: 2+Math.random()*3, a: Math.random()*Math.PI
+          });}}
+          spawn();
+          function tick(){
+            ctx.clearRect(0,0,canvas.width,canvas.height);
+            confetti.forEach(p=>{
+              p.x+=p.vx; p.y+=p.vy; p.a+=0.1;
+              ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.a);
+              ctx.fillStyle = ['#ef4444','#f97316','#10b981','#60a5fa'][Math.floor(Math.random()*4)];
+              ctx.fillRect(-p.s/2, -p.s/2, p.s, p.s*2);
+              ctx.restore();
+            });
+            requestAnimationFrame(tick);
+          }
+          tick();
+          setTimeout(()=>{spawn()}, 600);
         </script>
         """, height=160)
 
-    # Status banner
+    # Status banner (only)
     st.markdown('<div class="cg-card">', unsafe_allow_html=True)
     status_cls = "status-ok" if total_events > 0 else "status-safe"
     status_text = "Stampede detected" if total_events > 0 else "No stampede detected"
@@ -459,6 +513,7 @@ def render_results(df_frames, df_events, labeled_path):
     if not df_frames.empty:
         base = alt.Chart(df_frames).properties(height=240)
         left, right = st.columns(2)
+
         with left:
             st.subheader("CNN Probability")
             line_prob = base.mark_line().encode(
@@ -468,6 +523,7 @@ def render_results(df_frames, df_events, labeled_path):
             )
             thresh = base.mark_rule(strokeDash=[4,4]).encode(y=alt.datum(CNN_THRESHOLD))
             st.altair_chart((line_prob + thresh).interactive(), use_container_width=True)
+
         with right:
             st.subheader("Estimated Head Count")
             line_head = base.mark_line().encode(
@@ -487,8 +543,9 @@ def render_results(df_frames, df_events, labeled_path):
     st.subheader("Per-frame predictions")
     st.dataframe(df_frames.head(1000), use_container_width=True)
 
-    # Downloads
+    # Stable keys so reruns don't duplicate widgets
     uid = os.path.splitext(os.path.basename(labeled_path))[0] if labeled_path else "na"
+
     c1, c2, c3 = st.columns(3)
     with c1:
         st.download_button("⬇️ events.csv", df_events.to_csv(index=False).encode("utf-8"),
@@ -501,9 +558,8 @@ def render_results(df_frames, df_events, labeled_path):
     with c3:
         if os.path.exists(labeled_path) and os.path.getsize(labeled_path) > 0:
             with open(labeled_path, "rb") as fh:
-                st.download_button("⬇️ labeled.mp4", fh.read(),
-                                   file_name=os.path.basename(labeled_path), mime="video/mp4",
-                                   use_container_width=True, key=f"dl_video_{uid}")
+                st.download_button("⬇️ labeled.mp4", fh.read(), file_name=os.path.basename(labeled_path),
+                                   mime="video/mp4", use_container_width=True, key=f"dl_video_{uid}")
         else:
             st.button("Video unavailable", disabled=True, use_container_width=True, key=f"dl_na_{uid}")
 
@@ -511,42 +567,47 @@ def render_results(df_frames, df_events, labeled_path):
     if os.path.exists(labeled_path): st.video(labeled_path)
     else: st.info("Preview unavailable.")
 
-    # ===== NEW: SHAP Hot Spots (picture) =====
+    # ===================== SHAP hot spots (NEW) =====================
     st.markdown('<h2 class="cg-h2">Explanations — SHAP hot spots</h2>', unsafe_allow_html=True)
-    if not HAVE_SHAP:
-        st.info(f"SHAP explanation skipped: {SHAP_IMPORT_ERR}")
-        return
-
     if df_events.empty:
-        st.info("No events to explain. Upload a video with a detected interval to view SHAP hot spots.")
+        st.info("No events to explain.")
         return
 
-    # Use the middle of the first event
+    # Take the first detected interval
     row = df_events.iloc[0]
     start_t = float(row["start_time_sec"])
     end_t   = float(row["end_time_sec"])
     t_mid   = 0.5 * (start_t + end_t)
 
-    frame_for_shap = _extract_frame_at_time(labeled_path, t_mid) or _extract_frame_at_time(labeled_path, start_t)
-    if frame_for_shap is None or frame_for_shap.size == 0:
+    # SAFE extract (avoid boolean evaluations on numpy arrays)
+    frame_for_shap = _extract_frame_at_time(labeled_path, t_mid)
+    if frame_for_shap is None or getattr(frame_for_shap, "size", 0) == 0:
+        frame_for_shap = _extract_frame_at_time(labeled_path, start_t)
+
+    if frame_for_shap is None or getattr(frame_for_shap, "size", 0) == 0:
         st.warning("Could not extract a valid frame for SHAP visualization.")
         return
 
-    overlay, boxes = shap_overlay_for_frame(model, frame_for_shap, q=0.90)
+    try:
+        # Prepare grayscale 100x100 exactly like model input
+        gray = cv2.cvtColor(frame_for_shap, cv2.COLOR_BGR2GRAY)
+        g100 = cv2.resize(gray, (100,100), interpolation=cv2.INTER_AREA)
 
-    # Show + download
-    st.image(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB),
-             caption=f"SHAP hot spots around t={t_mid:.2f}s (boxes={len(boxes)})",
-             use_column_width=True)
+        mask = _compute_shap_mask(model, g100)   # (100,100) in [0,1]
+        blended = _overlay_mask_on_frame(frame_for_shap, mask)
+        if blended is None:
+            raise RuntimeError("Overlay failed (empty frame).")
 
-    out_dir = os.path.join(os.getcwd(), "outputs"); os.makedirs(out_dir, exist_ok=True)
-    shap_path = os.path.join(out_dir, f"{uid}_shap_{int(t_mid*1000)}ms.png")
-    ok, buf = cv2.imencode(".png", overlay)
-    if ok:
-        with open(shap_path, "wb") as f:
-            f.write(buf.tobytes())
-        st.download_button("⬇️ Download SHAP picture", data=buf.tobytes(),
-                           file_name=os.path.basename(shap_path), mime="image/png")
+        cA, cB = st.columns(2)
+        with cA:
+            st.caption(f"Frame @ {sec_to_tc(t_mid)} (mid of first event)")
+            st.image(cv2.cvtColor(frame_for_shap, cv2.COLOR_BGR2RGB), use_column_width=True)
+        with cB:
+            st.caption("SHAP heatmap overlay (model focus)")
+            st.image(cv2.cvtColor(blended, cv2.COLOR_BGR2RGB), use_column_width=True)
+
+    except Exception as e:
+        st.info(f"SHAP explanation skipped: {e}")
 
 # ---- Re-render results from session on EVERY run (prevents ‘refresh’ loss)
 if "video_results" in st.session_state:
@@ -565,7 +626,7 @@ uploaded = st.file_uploader(
 go = st.button("Analyze")
 
 # =============================================================================
-# Core analysis (unchanged)
+# Core analysis
 # =============================================================================
 def analyze_video(
     video_path,
@@ -632,7 +693,7 @@ def analyze_video(
             else:
                 delta = prev_count - curr_count
                 r = (prev_count - curr_count) / max(1, prev_count)
-                y_heads = 1 if (delta >= abs_drop or r >= rel_drop) else 0
+                y_heads = 1 if (delta >= ABS_DROP or r >= REL_DROP) else 0
 
             x = preprocess_for_cnn(gray)
             p_cnn = float(model.predict(x, verbose=0)[0][0])
@@ -711,10 +772,12 @@ if go:
         with st.spinner("Analyzing video…"):
             df_frames, df_events, labeled_path = analyze_video(tmp.name, model)
 
-        # Persist results so any rerun (e.g., downloads) keeps the view
+        # -------- Persist results so any rerun (e.g., downloads) keeps the view --------
         st.session_state["video_results"] = {
             "df_frames": df_frames,
             "df_events": df_events,
             "labeled_path": labeled_path,
         }
+
+        # Render now
         render_results(df_frames, df_events, labeled_path)
