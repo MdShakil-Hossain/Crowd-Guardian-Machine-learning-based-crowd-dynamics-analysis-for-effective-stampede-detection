@@ -1,6 +1,7 @@
 # app.py — Crowd Guardian (Video only)
-# Premium UI + session_state persistence.
-# Adds robust Grad-CAM overlay (build-safe, nested Sequential-safe).
+# Premium UI: custom HTML/CSS, decorated sidebar, status banner (no timeline bar),
+# Altair charts, JS confetti, animated particles background, and
+# **session_state persistence** so downloads don't "refresh away" your results.
 
 import os
 import cv2
@@ -18,7 +19,6 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import urllib.request, hashlib
 import streamlit.components.v1 as components
-import tensorflow as tf  # <-- needed for warm-up + Grad-CAM
 
 # =============================================================================
 # App config
@@ -63,7 +63,10 @@ st.markdown(
         --muted:rgba(148,163,184,.35); --muted2:rgba(148,163,184,.18);
         --text:#e6e9ef; --accent:#ef4444; --accent2:#f97316;
       }
-      html, body, [class*="css"] { font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif !important; color: var(--text); }
+      html, body, [class*="css"] {
+        font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif !important;
+        color: var(--text);
+      }
       .main .block-container {max-width: 1080px; padding-top: .6rem; padding-bottom: 2rem;}
       body {
         background:
@@ -73,28 +76,38 @@ st.markdown(
       }
       header{visibility:hidden;} [data-testid="stToolbar"]{display:none;} #MainMenu{visibility:hidden;} footer{visibility:hidden;}
 
-      .cg-hero { margin-top: 8px; padding: 30px 32px; border-radius: 20px; border: 1px solid var(--muted2);
-                 background: radial-gradient(1200px 420px at 0% -10%, rgba(59,130,246,.16), transparent),
-                            linear-gradient(180deg, rgba(17,24,39,.55), rgba(2,6,23,.45));
-                 text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+      .cg-hero {
+        margin-top: 8px; padding: 30px 32px; border-radius: 20px;
+        border: 1px solid var(--muted2);
+        background:
+          radial-gradient(1200px 420px at 0% -10%, rgba(59,130,246,.16), transparent),
+          linear-gradient(180deg, rgba(17,24,39,.55), rgba(2,6,23,.45));
+        text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,.25);
+      }
       .cg-title  {font-size: 2.75rem; line-height: 1.08; margin: 0 0 .35rem 0; letter-spacing:.1px;}
       .cg-subtle {opacity:.95; margin:0; font-size: 1.08rem;}
 
       .cg-h2 {text-align:center; margin: 1.1rem 0 .7rem 0; font-size:1.35rem;}
-      .cg-card {border: 1px solid var(--muted2); border-radius: 16px; padding: 14px 16px; background: rgba(15,23,42,.45); box-shadow: 0 10px 30px rgba(0,0,0,.25);}
+      .cg-card {border: 1px solid var(--muted2); border-radius: 16px; padding: 14px 16px;
+                background: rgba(15,23,42,.45); box-shadow: 0 10px 30px rgba(0,0,0,.25);}
 
       .cg-center {display:flex; justify-content:center; margin-top:.6rem;}
-      .pill {display:inline-block; padding:3px 12px; border-radius:999px; font-size:12px; border:1px solid var(--muted); background: rgba(30,41,59,.55)}
+      .pill {display:inline-block; padding:3px 12px; border-radius:999px; font-size:12px;
+             border:1px solid var(--muted); background: rgba(30,41,59,.55)}
       .ok   {background: rgba(16,185,129,.18); color:#a7f3d0; border-color: rgba(16,185,129,.35)}
       .err  {background: rgba(239,68,68,.18); color:#fecaca; border-color: rgba(239,68,68,.35)}
 
-      .stButton>button { width: 100%; padding: 12px 14px; border-radius: 12px; font-weight: 700; border: 0; color: #fff;
-                         background: linear-gradient(90deg, var(--accent), var(--accent2));
-                         box-shadow: 0 8px 24px rgba(249,115,22,.35); }
+      .stButton>button {
+        width: 100%; padding: 12px 14px; border-radius: 12px; font-weight: 700; border: 0; color: #fff;
+        background: linear-gradient(90deg, var(--accent), var(--accent2));
+        box-shadow: 0 8px 24px rgba(249,115,22,.35);
+      }
       .stButton>button:hover {filter: brightness(1.07)}
 
       [data-testid="stSidebar"] {min-width: 330px; max-width: 360px; border-right: 1px solid var(--muted2);}
-      [data-testid="stSidebar"] > div:first-child { background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 60%, #182234 100%); color: var(--text); }
+      [data-testid="stSidebar"] > div:first-child {
+        background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 60%, #182234 100%); color: var(--text);
+      }
       .sb-brand { font-weight: 700; font-size: 1.10rem; letter-spacing:.2px; margin: 12px 14px 10px 14px; }
 
       .sb-card { border:1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.04);
@@ -103,20 +116,27 @@ st.markdown(
       .sb-card ul, .sb-card ol {padding-left: 1.05rem; margin: .25rem 0 0 0;}
       .sb-card li {margin-bottom: 6px;}
 
-      .capstone-badge { display:inline-flex; align-items:center; gap:8px; margin-bottom:10px;
-                        background: linear-gradient(90deg, rgba(239,68,68,.18), rgba(249,115,22,.18));
-                        border:1px solid rgba(249,115,22,.35); color:#ffd7c2; padding:6px 10px; border-radius:999px; font-size:12px; }
+      .capstone-badge {
+        display:inline-flex; align-items:center; gap:8px; margin-bottom:10px;
+        background: linear-gradient(90deg, rgba(239,68,68,.18), rgba(249,115,22,.18));
+        border:1px solid rgba(249,115,22,.35); color:#ffd7c2; padding:6px 10px; border-radius:999px; font-size:12px;
+      }
       .capstone-grid { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-      .cap-card { border:1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.03); border-radius: 12px; padding: 10px 12px; }
+      .cap-card { border:1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.03);
+                  border-radius: 12px; padding: 10px 12px; }
       .cap-title {font-weight:700; margin-bottom:6px;}
       .cap-kv {font-size: 13px; line-height: 1.25rem;}
       .cap-name {font-weight:600;}
       .cap-id {opacity:.85;}
       .divider {height:1px; background:rgba(255,255,255,.06); margin:10px 0;}
 
-      .status-banner{ display:flex; align-items:center; justify-content:center; gap:10px; height:52px; border-radius:12px; margin:12px 0;
-                      font-weight:800; letter-spacing:.3px; text-transform:uppercase; border:1px solid rgba(255,255,255,.10);
-                      box-shadow: 0 6px 18px rgba(0,0,0,.25); }
+      .status-banner{
+        display:flex; align-items:center; justify-content:center;
+        gap:10px; height:52px; border-radius:12px; margin:12px 0;
+        font-weight:800; letter-spacing:.3px; text-transform:uppercase;
+        border:1px solid rgba(255,255,255,.10);
+        box-shadow: 0 6px 18px rgba(0,0,0,.25);
+      }
       .status-dot{width:10px; height:10px; border-radius:50%; display:inline-block; box-shadow:0 0 0 3px rgba(255,255,255,.06) inset;}
       .status-ok{  background: linear-gradient(90deg, rgba(239,68,68,.22), rgba(249,115,22,.22)); color:#ffe5d5; }
       .status-safe{background: linear-gradient(90deg, rgba(16,185,129,.22), rgba(59,130,246,.22)); color:#dcfce7; }
@@ -134,22 +154,35 @@ st.markdown(
 # =============================================================================
 components.html("""
 <canvas id="cg-bg"></canvas>
-<style>#cg-bg{position:fixed; inset:0; z-index:-2; background:transparent;}</style>
+<style>
+  #cg-bg{position:fixed; inset:0; z-index:-2; background:transparent;}
+</style>
 <script>
   const c = document.getElementById('cg-bg'), ctx = c.getContext('2d');
   function resize(){ c.width = innerWidth; c.height = innerHeight; }
   addEventListener('resize', resize); resize();
+
   const N = 120;
-  const P = Array.from({length:N}, () => ({x: Math.random()*c.width,y: Math.random()*c.height,
-    vx: -0.25 + Math.random()*0.5, vy: -0.25 + Math.random()*0.5, s: 0.6 + Math.random()*1.6}));
+  const P = Array.from({length:N}, () => ({
+    x: Math.random()*c.width,
+    y: Math.random()*c.height,
+    vx: -0.25 + Math.random()*0.5,
+    vy: -0.25 + Math.random()*0.5,
+    s: 0.6 + Math.random()*1.6
+  }));
+
   function tick(){
     ctx.clearRect(0,0,c.width,c.height);
-    P.forEach(p=>{ p.x += p.vx; p.y += p.vy;
+    P.forEach(p=>{
+      p.x += p.vx; p.y += p.vy;
       if(p.x<0) p.x=c.width; if(p.x>c.width) p.x=0;
       if(p.y<0) p.y=c.height; if(p.y>c.height) p.y=0;
+
       const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 6+p.s*2);
-      g.addColorStop(0, 'rgba(255,255,255,0.8)'); g.addColorStop(1, 'rgba(255,255,255,0)');
-      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x,p.y, 1.2+p.s, 0, Math.PI*2); ctx.fill();
+      g.addColorStop(0, 'rgba(255,255,255,0.8)');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(p.x,p.y, 1.2+p.s, 0, Math.PI*2); ctx.fill();
     });
     requestAnimationFrame(tick);
   }
@@ -202,7 +235,20 @@ with st.sidebar:
         """,
         unsafe_allow_html=True
     )
+    st.markdown(
+        """
+        <div class="sb-card">
+          <b>Outputs</b>
+          <ul>
+            <li><code>events.csv</code> — start/end/duration of intervals</li>
+            <li><code>frame_preds.csv</code> — per-frame metrics & labels</li>
+            <li><code>labeled.mp4</code> — overlay video with live stats</li>
+          </ul>
+        </div>
+        """, unsafe_allow_html=True
+    )
     try:
+        import tensorflow as tf
         tf_ver = tf.__version__
     except Exception:
         tf_ver = "not loaded"
@@ -241,13 +287,13 @@ def _download_to_cache(url: str) -> str:
 
 @st.cache_resource(show_spinner=False)
 def load_cnn(path_or_url: str):
+    import tensorflow as tf
     if path_or_url.startswith(("http://", "https://")):
         local = _download_to_cache(path_or_url)
     else:
         p = Path(path_or_url)
         local = str(p if p.is_absolute() else (APP_DIR / p))
-    # compile=False keeps it robust across TF/Keras versions
-    return tf.keras.models.load_model(local, compile=False)
+    return tf.keras.models.load_model(local, compile=False)  # Keras 3 safe
 
 def sec_to_tc(sec: float) -> str:
     h = int(sec // 3600); m = int((sec % 3600) // 60); s = sec % 60
@@ -316,72 +362,12 @@ def transcode_to_h264(src_path: str, dst_path: str, fps: float):
     ok = (proc.returncode == 0) and os.path.exists(dst_path) and os.path.getsize(dst_path) > 0
     return (dst_path if ok else src_path), ok, (proc.stderr or "")
 
-# ================= Grad-CAM helpers (build-safe, nested-Sequential-safe) =================
-def _warm_up_model(m: tf.keras.Model, h: int = 100, w: int = 100):
-    """Ensure the model graph is built so layers have defined .output."""
-    try:
-        dummy = tf.zeros((1, h, w, 1), dtype=tf.float32)
-        _ = m(dummy, training=False)
-    except Exception:
-        try:
-            m.build((None, h, w, 1))
-        except Exception:
-            pass
-
-def _last_conv2d_layer(model: tf.keras.Model):
-    convs = []
-    def walk(layers):
-        for L in layers:
-            # Explore nested containers first so deepest convs end up last
-            if hasattr(L, "layers") and L.layers:
-                walk(L.layers)
-            if isinstance(L, tf.keras.layers.Conv2D):
-                convs.append(L)
-    walk(model.layers)
-    return convs[-1] if convs else None
-
-def gradcam_heatmap_from_gray(gray100: np.ndarray, model: tf.keras.Model,
-                              class_index: int = 0, target_h: int = 100, target_w: int = 100) -> np.ndarray:
-    """
-    gray100: (100,100) grayscale image (uint8 or float) matching training preprocessing (0..255 scale).
-    Returns a (target_h, target_w) float32 heatmap in [0,1].
-    """
-    _warm_up_model(model, 100, 100)
-
-    x = gray100.astype("float32") / 255.0
-    x = x.reshape(1, 100, 100, 1)
-
-    last_conv = _last_conv2d_layer(model)
-    if last_conv is None:
-        raise RuntimeError("Grad-CAM: no Conv2D layer found in the model.")
-
-    grad_model = tf.keras.Model(inputs=model.inputs, outputs=[last_conv.output, model.output])
-
-    with tf.GradientTape() as tape:
-        conv_out, preds = grad_model(x, training=False)
-        # Binary head: single sigmoid at index 0
-        target = preds[:, 0] if preds.shape[-1] == 1 else preds[:, class_index]
-
-    grads = tape.gradient(target, conv_out)                 # (1,hc,wc,c)
-    weights = tf.reduce_mean(grads, axis=(1, 2))            # (1,c)
-    cam = tf.reduce_sum(conv_out * weights[:, None, None, :], axis=-1)  # (1,hc,wc)
-    cam = tf.nn.relu(cam)[0]                                # (hc,wc)
-
-    # Normalize to [0,1]
-    maxv = tf.reduce_max(cam)
-    cam = cam / (maxv + 1e-8)
-
-    # Resize to frame size
-    cam = tf.image.resize(cam[..., None], (target_h, target_w))
-    return cam.numpy().squeeze().astype(np.float32)
-
 # =============================================================================
 # Load model (silent) + status
 # =============================================================================
 model, load_err = None, None
 try:
     model = load_cnn(MODEL_URL)
-    _warm_up_model(model)  # <-- ensure graph is built before Grad-CAM
 except Exception as e:
     load_err = str(e)
 
@@ -394,7 +380,7 @@ if load_err:
     st.caption(load_err)
 
 # =============================================================================
-# Re-render persisted results so downloads don't clear the page
+# (NEW) Re-render persisted results so downloads don't clear the page
 # =============================================================================
 def render_results(df_frames, df_events, labeled_path):
     st.markdown('<h2 class="cg-h2">Results</h2>', unsafe_allow_html=True)
@@ -444,7 +430,7 @@ def render_results(df_frames, df_events, labeled_path):
         </script>
         """, height=160)
 
-    # Status banner
+    # Status banner (only)
     st.markdown('<div class="cg-card">', unsafe_allow_html=True)
     status_cls = "status-ok" if total_events > 0 else "status-safe"
     status_text = "Stampede detected" if total_events > 0 else "No stampede detected"
@@ -458,6 +444,7 @@ def render_results(df_frames, df_events, labeled_path):
     if not df_frames.empty:
         base = alt.Chart(df_frames).properties(height=240)
         left, right = st.columns(2)
+
         with left:
             st.subheader("CNN Probability")
             line_prob = base.mark_line().encode(
@@ -467,6 +454,7 @@ def render_results(df_frames, df_events, labeled_path):
             )
             thresh = base.mark_rule(strokeDash=[4,4]).encode(y=alt.datum(CNN_THRESHOLD))
             st.altair_chart((line_prob + thresh).interactive(), use_container_width=True)
+
         with right:
             st.subheader("Estimated Head Count")
             line_head = base.mark_line().encode(
@@ -624,17 +612,6 @@ def analyze_video(
                     x1, y1 = prev_pts[i_prev]; x2, y2 = head_pts[j_curr]
                     cv2.line(vis, (int(x1), int(y1)), (int(x2), int(y2)), (255, 0, 0), 2)
 
-            # ---- Grad-CAM overlay (build-safe) ----
-            try:
-                gray100 = cv2.resize(gray, (100, 100), interpolation=cv2.INTER_AREA)
-                cam = gradcam_heatmap_from_gray(gray100, model, class_index=0, target_h=H, target_w=W)
-                cam_u8 = np.clip(cam * 255, 0, 255).astype(np.uint8)
-                heat_bgr = cv2.applyColorMap(cam_u8, cv2.COLORMAP_JET)
-                vis = cv2.addWeighted(vis, 0.70, heat_bgr, 0.30, 0.0)
-            except Exception as e:
-                if processed == 0:
-                    st.toast(f"Grad-CAM failed: {e}", icon="⚠️")
-
             banner_h = max(40, H//14)
             color = (0,0,255) if final_label==1 else (0,180,0)
             cv2.rectangle(vis, (0,0), (W, banner_h), color, -1)
@@ -684,7 +661,7 @@ if go:
         with st.spinner("Analyzing video…"):
             df_frames, df_events, labeled_path = analyze_video(tmp.name, model)
 
-        # Persist results so any rerun (e.g., downloads) keeps the view
+        # -------- Persist results so any rerun (e.g., downloads) keeps the view --------
         st.session_state["video_results"] = {
             "df_frames": df_frames,
             "df_events": df_events,
