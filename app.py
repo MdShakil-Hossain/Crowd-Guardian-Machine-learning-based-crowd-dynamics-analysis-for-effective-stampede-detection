@@ -1,7 +1,8 @@
 # app.py — Crowd Guardian (Video only)
 # Premium UI: custom HTML/CSS, decorated sidebar, status banner (no timeline bar),
 # Altair charts, JS confetti, animated particles background, and
-# **session_state persistence** so downloads don't "refresh away" your results.
+# session_state persistence so downloads don't "refresh away" your results.
+# + SHAP hot-spot visualization (peak-probability frames inside events)
 
 import os
 import cv2
@@ -380,7 +381,7 @@ if load_err:
     st.caption(load_err)
 
 # =============================================================================
-# (NEW) Re-render persisted results so downloads don't clear the page
+# Re-render persisted results so downloads don't clear the page
 # =============================================================================
 def render_results(df_frames, df_events, labeled_path):
     st.markdown('<h2 class="cg-h2">Results</h2>', unsafe_allow_html=True)
@@ -430,7 +431,7 @@ def render_results(df_frames, df_events, labeled_path):
         </script>
         """, height=160)
 
-    # Status banner (only)
+    # Status banner
     st.markdown('<div class="cg-card">', unsafe_allow_html=True)
     status_cls = "status-ok" if total_events > 0 else "status-safe"
     status_text = "Stampede detected" if total_events > 0 else "No stampede detected"
@@ -474,7 +475,6 @@ def render_results(df_frames, df_events, labeled_path):
     st.subheader("Per-frame predictions")
     st.dataframe(df_frames.head(1000), use_container_width=True)
 
-    # Stable keys so reruns don't duplicate widgets
     uid = os.path.splitext(os.path.basename(labeled_path))[0] if labeled_path else "na"
 
     c1, c2, c3 = st.columns(3)
@@ -498,101 +498,141 @@ def render_results(df_frames, df_events, labeled_path):
     if os.path.exists(labeled_path): st.video(labeled_path)
     else: st.info("Preview unavailable.")
 
-# ---------------- SHAP (added) ----------------
-def _explain_event_with_shap(labeled_video_path: str, frame_index: int):
-    """
-    Read the labeled video frame and compute SHAP heatmap on the grayscale
-    CNN input (100x100). Resize to the actual frame size and draw hot-spot boxes.
-    """
-    try:
-        import shap
-    except Exception:
-        raise RuntimeError("SHAP is not installed. Add 'shap' to requirements.txt")
-
-    # Read requested frame
-    cap = cv2.VideoCapture(labeled_video_path)
-    n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-    fidx = max(0, min(int(frame_index), max(0, n_frames - 1)))
+# =============================================================================
+# SHAP — helpers + section (NEW)
+# =============================================================================
+def _read_frame_at(video_path: str, frame_index: int):
+    cap = cv2.VideoCapture(video_path)
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    fidx  = max(0, min(int(frame_index), max(0, total - 1)))
     cap.set(cv2.CAP_PROP_POS_FRAMES, fidx)
-    ok, frame_bgr = cap.read()
+    ok, frame = cap.read()
     cap.release()
-    if not ok or frame_bgr is None:
-        raise RuntimeError(f"Could not read frame {fidx} from video for SHAP.")
+    if not ok or frame is None:
+        raise RuntimeError(f"Could not read frame {fidx} from {os.path.basename(video_path)}")
+    return frame
 
+def _peak_frame_in_event(df_frames: pd.DataFrame, start_f: int, end_f: int) -> int:
+    seg = df_frames[(df_frames["frame_index"] >= start_f) & (df_frames["frame_index"] <= end_f)]
+    if seg.empty:
+        return int((start_f + end_f) // 2)
+    j = seg["prob_cnn"].astype(float).idxmax()
+    return int(df_frames.loc[j, "frame_index"])
+
+def _build_bg_batch(video_path: str, around_idx: int, k: int = 6):
+    xs = []
+    try:
+        step = max(1, around_idx // (k + 1))
+        for i in range(k):
+            idx = max(0, around_idx - (i + 1) * step)
+            frm = _read_frame_at(video_path, idx)
+            gray = cv2.cvtColor(frm, cv2.COLOR_BGR2GRAY)
+            xs.append(preprocess_for_cnn(gray)[0])
+    except Exception:
+        pass
+    if not xs:
+        return np.zeros((1, 100, 100, 1), dtype=np.float32)
+    return np.stack(xs, axis=0).astype(np.float32)
+
+def _explain_frame_with_shap(model, frame_bgr: np.ndarray, bg_batch: np.ndarray):
+    import shap
     gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
     H, W = gray.shape[:2]
     x = preprocess_for_cnn(gray)  # (1,100,100,1)
 
-    # Try unified API first
+    heat_small = None
     try:
-        exp = shap.Explainer(model)(x)
-        sv = np.array(exp.values)  # (1,100,100,1) or (1,100,100)
-        sv = sv[0]
+        expl = shap.GradientExplainer(model, bg_batch)
+        vals = expl.shap_values(x)
+        sv = vals[0] if isinstance(vals, (list, tuple)) else vals
+        if sv.ndim == 4:   # (1,100,100,1)
+            sv = sv[0, ..., 0]
+        elif sv.ndim == 3: # (1,100,100)
+            sv = sv[0]
+        heat_small = np.abs(sv).astype(np.float32)
     except Exception:
-        # Fallback: KernelExplainer (single frame, small nsamples)
-        bg = np.zeros_like(x)
-        f = lambda z: model.predict(z.reshape((-1,100,100,1)), verbose=0)
-        ke = shap.KernelExplainer(f, bg.reshape(1,-1))
-        sv = ke.shap_values(x.reshape(1,-1), nsamples=50)
-        sv = np.array(sv).reshape(100,100,1)
+        # Kernel fallback
+        try:
+            f = lambda z: model.predict(z.reshape((-1, 100, 100, 1)), verbose=0)
+            ke = shap.KernelExplainer(f, bg_batch.reshape(len(bg_batch), -1))
+            sv = ke.shap_values(x.reshape(1, -1), nsamples=50)
+            sv = np.array(sv)[0].reshape(100, 100)
+            heat_small = np.abs(sv).astype(np.float32)
+        except Exception as e:
+            raise RuntimeError(f"SHAP failed: {e}")
 
-    # 2D map
-    sv = np.array(sv)
-    if sv.ndim == 3 and sv.shape[-1] == 1:
-        sv = sv[..., 0]
-    if sv.ndim != 2 or sv.size == 0:
-        raise RuntimeError(f"Unexpected SHAP shape: {sv.shape}")
-
-    # Resize to frame size and overlay
-    heat_small = np.abs(sv).astype(np.float32)
     heat = cv2.resize(heat_small, (W, H), interpolation=cv2.INTER_LINEAR)
+    rng = float(np.ptp(heat))
+    if rng < 1e-9: rng = 1e-9
+    heat_norm = (heat - float(np.min(heat))) / rng
+    return heat_norm
 
-    # ---- FIX for NumPy 2.0: use np.ptp instead of ndarray.ptp ----
-    denom = float(np.ptp(heat))  # safe for NumPy 2.0
-    if denom < 1e-9:
-        denom = 1e-9
-    heat_norm = (heat - float(np.min(heat))) / denom
-    # ---------------------------------------------------------------
-
-    heat_color = cv2.applyColorMap((heat_norm*255).astype(np.uint8), cv2.COLORMAP_JET)
-    vis = cv2.addWeighted(frame_bgr, 0.60, heat_color, 0.40, 0)
-
-    # Draw boxes over top hot spots
-    thr = max(0.5, float(np.quantile(heat_norm, 0.90)))
+def _overlay_hot_boxes(frame_bgr: np.ndarray, heat_norm: np.ndarray,
+                       quantile: float = 0.85, max_boxes: int = 3, min_area_frac: float = 0.001):
+    H, W = heat_norm.shape[:2]
+    thr = float(np.quantile(heat_norm, quantile))
     mask = (heat_norm >= thr).astype(np.uint8) * 255
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+    mask = cv2.dilate(mask, kernel, iterations=1)
     cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    min_area = 0.002 * W * H
-    for c in cnts:
-        x0,y0,w,h = cv2.boundingRect(c)
-        if w*h >= min_area:
-            cv2.rectangle(vis, (x0,y0), (x0+w, y0+h), (0,0,255), 2)
 
+    min_area = max(50, int(min_area_frac * W * H))
+    boxes = []
+    for c in cnts:
+        x, y, w, h = cv2.boundingRect(c)
+        if w * h >= min_area:
+            boxes.append((x, y, w, h))
+
+    if not boxes:
+        py, px = np.unravel_index(np.argmax(heat_norm), heat_norm.shape)
+        bw = max(30, int(0.08 * W)); bh = max(30, int(0.08 * H))
+        x0 = max(0, px - bw // 2); y0 = max(0, py - bh // 2)
+        boxes = [(x0, y0, min(bw, W - x0), min(bh, H - y0))]
+
+    boxes = sorted(boxes, key=lambda b: b[2] * b[3], reverse=True)[:max_boxes]
+    vis = frame_bgr.copy()
+    for (x, y, w, h) in boxes:
+        cv2.rectangle(vis, (x, y), (x + w, y + h), (0, 0, 255), 2)
     return vis
 
-def render_shap_section(df_events, labeled_path):
-    """Show SHAP heatmaps for up to 3 detected intervals."""
+def render_shap_section(df_frames: pd.DataFrame, df_events: pd.DataFrame, src_video_path: str):
+    """Show SHAP hot spots for up to 3 events (using original uploaded video)."""
     if df_events.empty:
         return
     st.subheader("Explanations — SHAP hot spots")
+
     try:
-        topN = min(3, len(df_events))
-        cols = st.columns(topN)
-        for i in range(topN):
-            f0 = int(df_events.iloc[i]["start_frame"])
-            vis = _explain_event_with_shap(labeled_path, f0)
+        import shap  # noqa: F401
+    except Exception:
+        st.info("SHAP explanation skipped: SHAP is not installed. Add `shap>=0.46` to requirements.txt.")
+        return
+
+    topN = min(3, len(df_events))
+    cols = st.columns(topN)
+
+    for i in range(topN):
+        row = df_events.iloc[i]
+        start_f = int(row["start_frame"]); end_f = int(row["end_frame"])
+        fidx = _peak_frame_in_event(df_frames, start_f, end_f)
+
+        try:
+            frm = _read_frame_at(src_video_path, fidx)
+            bg  = _build_bg_batch(src_video_path, fidx, k=6)
+            heat = _explain_frame_with_shap(model, frm, bg)
+            vis  = _overlay_hot_boxes(frm, heat, quantile=0.85, max_boxes=3, min_area_frac=0.001)
             cols[i].image(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB),
                           use_column_width=True,
-                          caption=f"Event {i+1} @ frame {f0}")
-    except Exception as e:
-        st.info(f"SHAP explanation skipped: {e}")
-# ---------------- /SHAP ----------------------
+                          caption=f"Event {i+1}: frame {fidx} (peak CNN)")
+        except Exception as e:
+            cols[i].info(f"SHAP explanation skipped: {e}")
 
 # ---- Re-render results from session on EVERY run (prevents ‘refresh’ loss)
 if "video_results" in st.session_state:
     _res = st.session_state["video_results"]
     render_results(_res["df_frames"], _res["df_events"], _res["labeled_path"])
-    # show SHAP explanations (added)
-    render_shap_section(_res["df_events"], _res["labeled_path"])
+    if "src_video_path" in _res:
+        render_shap_section(_res["df_frames"], _res["df_events"], _res["src_video_path"])
 
 # =============================================================================
 # Upload
@@ -694,7 +734,6 @@ def analyze_video(
                                         sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
                 in_event, start_f, start_t = False, None, None
 
-            # overlay
             vis = frame_bgr.copy()
             for (cx, cy) in head_pts:
                 cv2.circle(vis, (int(cx), int(cy)), 4, (255,255,0), -1)
@@ -752,14 +791,14 @@ if go:
         with st.spinner("Analyzing video…"):
             df_frames, df_events, labeled_path = analyze_video(tmp.name, model)
 
-        # -------- Persist results so any rerun (e.g., downloads) keeps the view --------
+        # persist results so any rerun (e.g., downloads) keeps the view
         st.session_state["video_results"] = {
             "df_frames": df_frames,
             "df_events": df_events,
             "labeled_path": labeled_path,
+            "src_video_path": tmp.name,              # <-- keep original video for SHAP
         }
 
         # Render now
         render_results(df_frames, df_events, labeled_path)
-        # Show SHAP explanations (added)
-        render_shap_section(df_events, labeled_path)
+        render_shap_section(df_frames, df_events, tmp.name)
