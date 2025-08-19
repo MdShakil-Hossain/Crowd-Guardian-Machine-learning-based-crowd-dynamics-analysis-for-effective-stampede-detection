@@ -546,7 +546,14 @@ def _explain_event_with_shap(labeled_video_path: str, frame_index: int):
     # Resize to frame size and overlay
     heat_small = np.abs(sv).astype(np.float32)
     heat = cv2.resize(heat_small, (W, H), interpolation=cv2.INTER_LINEAR)
-    heat_norm = (heat - heat.min()) / (heat.ptp() + 1e-6)
+
+    # ---- FIX for NumPy 2.0: use np.ptp instead of ndarray.ptp ----
+    denom = float(np.ptp(heat))  # safe for NumPy 2.0
+    if denom < 1e-9:
+        denom = 1e-9
+    heat_norm = (heat - float(np.min(heat))) / denom
+    # ---------------------------------------------------------------
+
     heat_color = cv2.applyColorMap((heat_norm*255).astype(np.uint8), cv2.COLORMAP_JET)
     vis = cv2.addWeighted(frame_bgr, 0.60, heat_color, 0.40, 0)
 
