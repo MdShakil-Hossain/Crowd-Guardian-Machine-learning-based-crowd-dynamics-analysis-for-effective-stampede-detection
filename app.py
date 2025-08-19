@@ -363,6 +363,129 @@ def transcode_to_h264(src_path: str, dst_path: str, fps: float):
     return (dst_path if ok else src_path), ok, (proc.stderr or "")
 
 # =============================================================================
+# NEW: Grad-CAM utilities (replaces SHAP)
+# =============================================================================
+def _extract_frame_at_time(video_path: str, t_sec: float):
+    """Return BGR frame nearest to t_sec, or None."""
+    if not video_path or not os.path.exists(video_path):
+        return None
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return None
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    idx = max(0, int(round(t_sec * fps)))
+    cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+    ok, frame = cap.read()
+    if not ok:
+        cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, t_sec) * 1000.0)
+        ok, frame = cap.read()
+    cap.release()
+    return frame if ok and frame is not None and frame.size > 0 else None
+
+def _last_conv_layer(model):
+    import tensorflow as tf
+    # Find last Conv2D layer
+    for layer in reversed(model.layers):
+        try:
+            if isinstance(layer, tf.keras.layers.Conv2D):
+                return layer.name
+        except Exception:
+            continue
+    return None
+
+def _compute_gradcam_heat(frame_bgr, model):
+    """
+    Grad-CAM heatmap (0..1) upscaled to frame size.
+    Returns (heat_up, None) or (None, err).
+    """
+    try:
+        import tensorflow as tf
+    except Exception as e:
+        return None, f"TensorFlow not available: {e}"
+
+    if frame_bgr is None or frame_bgr.size == 0:
+        return None, "Empty frame"
+
+    try:
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        x = cv2.resize(gray, (100, 100), interpolation=cv2.INTER_AREA).astype("float32") / 255.0
+        x = np.expand_dims(x, axis=(0, -1))  # (1,100,100,1)
+
+        last_name = _last_conv_layer(model)
+        if not last_name:
+            return None, "No Conv2D layer found for Grad-CAM"
+
+        last_conv_layer = model.get_layer(last_name)
+        grad_model = tf.keras.models.Model(
+            [model.inputs],
+            [last_conv_layer.output, model.output]
+        )
+        with tf.GradientTape() as tape:
+            conv_out, preds = grad_model(x, training=False)
+            loss = preds[:, 0]  # binary output
+        grads = tape.gradient(loss, conv_out)
+        if grads is None:
+            return None, "No gradients (check model)"
+
+        pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
+        conv_out = conv_out[0]  # (h,w,c)
+        heat = tf.reduce_sum(tf.multiply(pooled_grads, conv_out), axis=-1).numpy()
+        heat = np.maximum(heat, 0)
+        if heat.max() > 0:
+            heat /= (heat.max() + 1e-8)
+
+        # Upscale to original frame size
+        H, W = gray.shape
+        heat_up = cv2.resize(heat.astype("float32"), (W, H), interpolation=cv2.INTER_CUBIC)
+        return heat_up, None
+    except Exception as e:
+        return None, f"Grad-CAM compute failed: {e}"
+
+def _boxes_from_heat(heat_up, min_area_frac=0.001, q=0.90, max_boxes=6):
+    """
+    From normalized heat (0..1), threshold at q-quantile and return bounding boxes.
+    Each box = (x, y, w, h).
+    """
+    if heat_up is None or heat_up.size == 0:
+        return []
+    H, W = heat_up.shape[:2]
+    thr = float(np.quantile(heat_up, q))
+    mask = (heat_up >= thr).astype(np.uint8) * 255
+
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k, iterations=1)
+    mask = cv2.dilate(mask, k, iterations=1)
+
+    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    boxes = []
+    area_min = min_area_frac * (H * W)
+    for c in cnts:
+        x, y, w, h = cv2.boundingRect(c)
+        if w * h >= area_min:
+            boxes.append((x, y, w, h))
+
+    # Rank by summed heat inside box
+    ranked = []
+    for (x, y, w, h) in boxes:
+        sub = heat_up[max(0,y):min(H,y+h), max(0,x):min(W,x+w)]
+        score = float(sub.sum())
+        ranked.append((score, (x, y, w, h)))
+    ranked.sort(reverse=True, key=lambda t: t[0])
+    return [b for _, b in ranked[:max_boxes]]
+
+def _overlay_gradcam_boxes(frame_bgr, heat_up, boxes, alpha=0.35):
+    """Overlay semi-transparent heat + draw boxes; return RGB image for Streamlit."""
+    H, W = frame_bgr.shape[:2]
+    heat_vis = (heat_up * 255.0).clip(0,255).astype(np.uint8)
+    heat_color = cv2.applyColorMap(heat_vis, cv2.COLORMAP_JET)  # BGR
+    overlay = cv2.addWeighted(frame_bgr, 1.0, heat_color, alpha, 0.0)
+    for i, (x,y,w,h) in enumerate(boxes, 1):
+        cv2.rectangle(overlay, (x,y), (x+w, y+h), (0,255,255), 3)
+        cv2.putText(overlay, f"Hot zone {i}", (x+6, max(0, y-10)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255,255,255), 2, cv2.LINE_AA)
+    return cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
+
+# =============================================================================
 # Load model (silent) + status
 # =============================================================================
 model, load_err = None, None
@@ -382,7 +505,7 @@ if load_err:
 # =============================================================================
 # (NEW) Re-render persisted results so downloads don't clear the page
 # =============================================================================
-def render_results(df_frames, df_events, labeled_path):
+def render_results(df_frames, df_events, labeled_path, src_path=None):
     st.markdown('<h2 class="cg-h2">Results</h2>', unsafe_allow_html=True)
 
     # KPIs
@@ -498,10 +621,49 @@ def render_results(df_frames, df_events, labeled_path):
     if os.path.exists(labeled_path): st.video(labeled_path)
     else: st.info("Preview unavailable.")
 
+    # ------------------------------
+    # NEW: Event snapshots (Grad-CAM)
+    # ------------------------------
+    if not df_events.empty and model is not None:
+        st.markdown('<h2 class="cg-h2">Event snapshots — Grad-CAM boxes</h2>', unsafe_allow_html=True)
+        snap_cols = st.columns(3)
+        use_src = src_path if (src_path and os.path.exists(src_path)) else labeled_path
+
+        for i, (_, row) in enumerate(df_events.head(3).iterrows()):
+            start_t = float(row["start_time_sec"])
+            end_t   = float(row["end_time_sec"])
+            t_mid   = 0.5 * (start_t + end_t)
+
+            frame = _extract_frame_at_time(use_src, t_mid)
+            if frame is None or frame.size == 0:
+                snap_cols[i % 3].warning("Could not extract frame.")
+                continue
+
+            heat, err = _compute_gradcam_heat(frame, model)
+            if heat is None:
+                snap_cols[i % 3].warning(f"Grad-CAM failed: {err}")
+                continue
+
+            boxes = _boxes_from_heat(heat, min_area_frac=0.001, q=0.90, max_boxes=6)
+            vis_rgb = _overlay_gradcam_boxes(frame, heat, boxes, alpha=0.35)
+
+            # Save snapshot for download
+            out_dir = os.path.join(os.getcwd(), "outputs")
+            os.makedirs(out_dir, exist_ok=True)
+            snap_path = os.path.join(out_dir, f"snapshot_event_{i+1}.png")
+            cv2.imwrite(snap_path, cv2.cvtColor(vis_rgb, cv2.COLOR_RGB2BGR))
+
+            with snap_cols[i % 3]:
+                st.image(vis_rgb, caption=f"Event {i+1} @ {sec_to_tc(t_mid)}", use_container_width=True)
+                with open(snap_path, "rb") as fh:
+                    st.download_button("⬇️ Download snapshot", fh.read(),
+                                       file_name=os.path.basename(snap_path),
+                                       mime="image/png", use_container_width=True)
+
 # ---- Re-render results from session on EVERY run (prevents ‘refresh’ loss)
 if "video_results" in st.session_state:
     _res = st.session_state["video_results"]
-    render_results(_res["df_frames"], _res["df_events"], _res["labeled_path"])
+    render_results(_res["df_frames"], _res["df_events"], _res["labeled_path"], _res.get("src_path"))
 
 # =============================================================================
 # Upload
@@ -666,8 +828,8 @@ if go:
             "df_frames": df_frames,
             "df_events": df_events,
             "labeled_path": labeled_path,
+            "src_path": tmp.name,          # keep original video for clean Grad-CAM snapshots
         }
 
         # Render now
-        render_results(df_frames, df_events, labeled_path)
-
+        render_results(df_frames, df_events, labeled_path, src_path=tmp.name)
