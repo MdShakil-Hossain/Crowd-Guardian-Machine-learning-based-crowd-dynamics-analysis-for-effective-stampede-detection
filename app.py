@@ -362,6 +362,100 @@ def transcode_to_h264(src_path: str, dst_path: str, fps: float):
     ok = (proc.returncode == 0) and os.path.exists(dst_path) and os.path.getsize(dst_path) > 0
     return (dst_path if ok else src_path), ok, (proc.stderr or "")
 
+# =========================
+# (ADDED) SHAP helpers — minimal additions
+# =========================
+@st.cache_resource(show_spinner=False)
+def _build_shap_background(video_path: str, max_bg: int = 32, stride: int = 10):
+    """Sample up to max_bg frames from the video as SHAP background (preprocessed 100x100x1)."""
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Cannot open for SHAP background: {video_path}")
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    N   = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    if stride <= 0: stride = max(1, int(fps//5))  # ~5 fps sampling default
+    xs = []; f = 0; grabbed = 0
+    while True and grabbed < max_bg:
+        ok, frame = cap.read()
+        if not ok: break
+        if f % stride == 0:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            xs.append(preprocess_for_cnn(gray)[0])  # (100,100,1)
+            grabbed += 1
+        f += 1
+    cap.release()
+    if not xs:
+        raise RuntimeError("Could not collect SHAP background frames.")
+    bg = np.stack(xs, axis=0).astype("float32")  # (B,100,100,1)
+    return bg
+
+@st.cache_resource(show_spinner=False)
+def _get_shap_explainer(model, background):
+    """SHAP GradientExplainer, fallback to generic Explainer if needed."""
+    try:
+        import shap
+    except Exception as e:
+        raise RuntimeError("SHAP is not installed. Run: pip install shap") from e
+    try:
+        explainer = shap.GradientExplainer(model, background)
+    except Exception:
+        explainer = shap.Explainer(model, background)
+    return explainer
+
+def _compute_shap_map(gray: np.ndarray, explainer) -> np.ndarray:
+    """
+    gray: HxW, returns positive attribution map upsampled to frame size, range [0,1].
+    """
+    H, W = gray.shape[:2]
+    x = preprocess_for_cnn(gray)  # (1,100,100,1)
+    try:
+        vals = explainer.shap_values(x)
+    except Exception:
+        vals = explainer(x).values
+    if isinstance(vals, list):
+        vals = vals[0]
+    vals = np.asarray(vals)
+    if vals.ndim == 4:
+        vals = vals[0]  # (100,100,1)
+    vals = vals[..., 0]  # (100,100)
+    pos = np.maximum(vals, 0.0)
+    if pos.max() > 1e-8:
+        pos = pos / pos.max()
+    pos_up = cv2.resize(pos, (W, H), interpolation=cv2.INTER_CUBIC)
+    return pos_up
+
+def _shap_boxes_from_map(pos_map: np.ndarray, q: float = 0.98, min_area_frac: float = 0.001, max_rois: int = 4):
+    """Threshold SHAP map at quantile -> contours -> boxes."""
+    H, W = pos_map.shape
+    thr = float(np.quantile(pos_map, q))
+    mask = (pos_map >= thr).astype("uint8") * 255
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT,(5,5)), iterations=2)
+    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    boxes = []
+    area_min = min_area_frac * W * H
+    for c in cnts:
+        if cv2.contourArea(c) >= area_min:
+            x,y,w,h = cv2.boundingRect(c)
+            boxes.append([x,y,x+w,y+h])
+    boxes = sorted(boxes, key=lambda b:(b[2]-b[0])*(b[3]-b[1]), reverse=True)[:max_rois]
+    return boxes
+
+def _overlay_heatmap(frame_bgr: np.ndarray, pos_map01: np.ndarray, alpha: float = 0.45) -> np.ndarray:
+    pos01 = np.clip(pos_map01, 0, 1)
+    heat = (pos01 * 255).astype("uint8")
+    heat = cv2.applyColorMap(heat, cv2.COLORMAP_JET)
+    return cv2.addWeighted(heat, alpha, frame_bgr, 1 - alpha, 0)
+
+def _read_frame(video_path: str, frame_index: int) -> np.ndarray:
+    cap = cv2.VideoCapture(video_path)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+    ok, frame = cap.read()
+    cap.release()
+    return frame if ok else None
+# =========================
+# END SHAP helpers
+# =========================
+
 # =============================================================================
 # Load model (silent) + status
 # =============================================================================
@@ -667,6 +761,47 @@ if go:
             "df_events": df_events,
             "labeled_path": labeled_path,
         }
+
+        # ========================
+        # (ADDED) SHAP EXPLANATIONS
+        # ========================
+        if not df_events.empty:
+            try:
+                with st.spinner("Computing SHAP explanations for detected intervals…"):
+                    bg = _build_shap_background(tmp.name, max_bg=32, stride=10)
+                    explainer = _get_shap_explainer(model, bg)
+
+                st.markdown('<h2 class="cg-h2">Explanations — SHAP hot spots inside detected intervals</h2>', unsafe_allow_html=True)
+
+                for idx, ev in df_events.iterrows():
+                    st.markdown(f"**Event {idx+1}** — {ev['start_tc']} → {ev['end_tc']}  (≈ {float(ev['duration_sec']):.2f}s)")
+                    s, e = int(ev["start_frame"]), int(ev["end_frame"])
+                    sel = df_frames[(df_frames.frame_index >= s) & (df_frames.frame_index <= e)].copy()
+                    if sel.empty:
+                        st.info("No frames found for this interval."); continue
+
+                    # pick top-3 frames by CNN probability
+                    top = sel.sort_values("prob_cnn", ascending=False).head(3)
+                    cols = st.columns(len(top))
+
+                    for (i, row) in enumerate(top.itertuples(index=False)):
+                        fidx = int(row.frame_index)
+                        frame = _read_frame(tmp.name, fidx)
+                        if frame is None:
+                            cols[i].warning(f"Frame {fidx} unavailable."); continue
+                        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                        pos_map = _compute_shap_map(gray, explainer)   # [0,1]
+                        boxes = _shap_boxes_from_map(pos_map, q=0.98, min_area_frac=0.001, max_rois=4)
+
+                        vis = _overlay_heatmap(frame.copy(), pos_map, alpha=0.45)
+                        for (x1,y1,x2,y2) in boxes:
+                            cv2.rectangle(vis, (x1,y1), (x2,y2), (0,255,255), 3)
+
+                        cols[i].image(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB),
+                                      caption=f"Frame {fidx} • p_cnn={float(row.prob_cnn):.2f}",
+                                      use_column_width=True)
+            except Exception as ex:
+                st.info(f"SHAP explanation skipped: {ex}. If missing, install with: pip install shap")
 
         # Render now
         render_results(df_frames, df_events, labeled_path)
