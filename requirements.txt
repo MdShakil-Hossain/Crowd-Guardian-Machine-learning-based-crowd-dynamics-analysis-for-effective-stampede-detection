@@ -7,4 +7,3 @@ opencv-python-headless>=4.12.0.88
 h5py>=3.10
 imageio-ffmpeg>=0.4.9
 tqdm>=4.66
-shap>=0.46
