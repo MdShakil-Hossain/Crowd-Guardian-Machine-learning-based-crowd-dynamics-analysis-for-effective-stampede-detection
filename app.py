@@ -1,7 +1,7 @@
 # app.py — Crowd Guardian (Video only)
-# Premium UI: custom HTML/CSS, decorated sidebar, status banner (no timeline bar),
+# Premium UI kept: custom HTML/CSS, decorated sidebar, status banner (no timeline bar),
 # Altair charts, JS confetti, animated particles background, and
-# **session_state persistence** so downloads don't "refresh away" your results.
+# session_state persistence.  Snapshot mode: red-marked frame per event (no full overlay video).
 
 import os
 import cv2
@@ -15,6 +15,7 @@ import pandas as pd
 import streamlit as st
 import altair as alt
 from scipy.optimize import linear_sum_assignment
+from collections import deque
 
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
@@ -44,14 +45,21 @@ DRAW_LINKS    = True
 TARGET_FPS    = None  # None = use every frame
 
 # ---------- XAI / Snapshot settings ----------
-XAI_ENABLED   = True           # Grad-CAM + zone risk
-GRID_ROWS     = 6              # finer grid to localize collapses
+XAI_ENABLED   = True
+GRID_ROWS     = 6
 GRID_COLS     = 6
-W_CAM, W_DROP, W_FLOW = 0.30, 0.45, 0.25   # weight saliency, local head-drop, downward motion
+
+# NEW: Head-down detector params (primary signal)
+HEAD_DOWN_WINDOW_SEC     = 0.8   # seconds to look back when measuring vertical drop
+HEAD_DOWN_MIN_DY_FRAC    = 0.02  # min normalized drop: dy / H
+HEAD_DOWN_GROUP_PENALTY  = 0.4   # penalty if many heads in the same cell drop (we want "one-person down")
+W_HEADDOWN, W_FLOW, W_CAM = 0.65, 0.20, 0.15  # risk weights (head-down dominates)
+
+# Ancillary cues
 FLOW_ENABLED  = True           # include optical flow
-DROP_GATE     = 1              # require >=1 head drop in a cell OR ...
-FLOW_GATE     = 0.30           # ... downward flow >= 0.30× mean
-SNAPSHOT_ONLY = True           # save one red-marked frame per event; no full overlay video
+FLOW_GATE     = 0.30           # candidate if downward flow >= 0.30× mean
+
+SNAPSHOT_ONLY = True           # only save one red-marked frame per event; no full overlay video
 
 # ---------- Model location ----------
 APP_DIR = Path(__file__).resolve().parent
@@ -63,7 +71,7 @@ DEFAULT_MODEL_URL = (
 MODEL_URL = st.secrets.get("MODEL_URL", DEFAULT_MODEL_URL)
 
 # =============================================================================
-# Global styles (HTML/CSS)
+# Global styles (HTML/CSS) — unchanged
 # =============================================================================
 st.markdown(
     """
@@ -166,24 +174,27 @@ st.markdown(
 components.html("""
 <canvas id="cg-bg"></canvas>
 <style>
-  #cg-bg{position:fixed, inset:0; z-index:-2; background:transparent;}
+  #cg-bg{position:fixed; inset:0; z-index:-2; background:transparent;}
 </style>
 <script>
   const c = document.getElementById('cg-bg'), ctx = c.getContext('2d');
   function resize(){ c.width = innerWidth; c.height = innerHeight; }
   addEventListener('resize', resize); resize();
+
   const N = 120;
   const P = Array.from({length:N}, () => ({
     x: Math.random()*c.width, y: Math.random()*c.height,
     vx: -0.25 + Math.random()*0.5, vy: -0.25 + Math.random()*0.5,
     s: 0.6 + Math.random()*1.6
   }));
+
   function tick(){
     ctx.clearRect(0,0,c.width,c.height);
     P.forEach(p=>{
       p.x += p.vx; p.y += p.vy;
       if(p.x<0) p.x=c.width; if(p.x>c.width) p.x=0;
       if(p.y<0) p.y=c.height; if(p.y>c.height) p.y=0;
+
       const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 6+p.s*2);
       g.addColorStop(0, 'rgba(255,255,255,0.8)');
       g.addColorStop(1, 'rgba(255,255,255,0)');
@@ -197,7 +208,7 @@ components.html("""
 """, height=0)
 
 # =============================================================================
-# Sidebar — PROJECT DETAILS
+# Sidebar — PROJECT DETAILS (unchanged)
 # =============================================================================
 with st.sidebar:
     st.markdown('<div class="sb-brand">🛡️ Crowd Guardian</div>', unsafe_allow_html=True)
@@ -356,9 +367,8 @@ def transcode_to_h264(src_path: str, dst_path: str, fps: float):
     ok = (proc.returncode == 0) and os.path.exists(dst_path) and os.path.getsize(dst_path) > 0
     return (dst_path if ok else src_path), ok, (proc.stderr or "")
 
-# =============== XAI: Grad-CAM + zone grid helpers ===========================
+# =============== XAI helpers ===========================
 def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
-    """Grad-CAM robust to Keras 3/TF2.20 model shapes and outputs."""
     import tensorflow as tf
 
     def _select_score_vector(preds_any):
@@ -371,15 +381,14 @@ def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
         r = t.shape.rank
         if r is None:
             t2 = tf.reshape(t, (tf.shape(t)[0], -1)); return t2[:, -1]
-        if r == 1:
-            return t
+        if r == 1:  return t
         if r == 2:
             c = t.shape[-1]
             return tf.squeeze(t, axis=-1) if c == 1 else t[:, -1]
         t2 = tf.reshape(t, (tf.shape(t)[0], -1))
         return t2[:, -1]
 
-    # pick last conv
+    # last conv layer
     target_layer = None
     if conv_layer_name:
         try:
@@ -417,8 +426,7 @@ def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
     return cam
 
 def upscale_cam(cam_small, W, H):
-    if cam_small is None:
-        return None
+    if cam_small is None: return None
     return cv2.resize(cam_small, (W, H), interpolation=cv2.INTER_CUBIC)
 
 def make_grid(W, H, rows=6, cols=6):
@@ -440,7 +448,6 @@ def heads_per_cell(head_pts, rows, cols, cell_w, cell_h):
         counts[r, c] += 1
     return counts
 
-# ---- Snapshot display helper ----
 def _show_image_resilient(path: str, caption: str) -> bool:
     try:
         data = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
@@ -487,12 +494,11 @@ if load_err:
     st.caption(load_err)
 
 # =============================================================================
-# Re-render persisted results
+# Render results (unchanged look)
 # =============================================================================
 def render_results(df_frames, df_events, labeled_path):
     st.markdown('<h2 class="cg-h2">Results</h2>', unsafe_allow_html=True)
 
-    # KPIs
     c1, c2, c3 = st.columns(3)
     total_events = int(len(df_events))
     total_dur = float(df_events["duration_sec"].sum()) if not df_events.empty else 0.0
@@ -501,7 +507,6 @@ def render_results(df_frames, df_events, labeled_path):
     c2.metric("Total Duration (s)", f"{total_dur:.2f}")
     c3.metric("Longest Event (s)", f"{longest:.2f}")
 
-    # Confetti
     if total_events > 0:
         components.html("""
         <canvas id="c"></canvas>
@@ -510,25 +515,33 @@ def render_results(df_frames, df_events, labeled_path):
              background:linear-gradient(90deg, rgba(16,185,129,.18), rgba(239,68,68,.18));}
         </style>
         <script>
-          const canvas = document.getElementById('c'); const ctx = canvas.getContext('2d');
+          const canvas = document.getElementById('c');
+          const ctx = canvas.getContext('2d');
           function resize(){canvas.width=canvas.clientWidth; canvas.height=140;}
           window.addEventListener('resize', resize); resize();
-          const confetti = []; function spawn(){for(let i=0;i<50;i++){confetti.push({
+          const confetti = [];
+          function spawn(){for(let i=0;i<50;i++){confetti.push({
             x: Math.random()*canvas.width, y: -10 - Math.random()*30,
             vx: (Math.random()-0.5)*1.5, vy: 1+Math.random()*2.5,
             s: 2+Math.random()*3, a: Math.random()*Math.PI
-          });}} spawn();
-          function tick(){ ctx.clearRect(0,0,canvas.width,canvas.height);
-            confetti.forEach(p=>{ p.x+=p.vx; p.y+=p.vy; p.a+=0.1;
+          });}}
+          spawn();
+          function tick(){
+            ctx.clearRect(0,0,canvas.width,canvas.height);
+            confetti.forEach(p=>{
+              p.x+=p.vx; p.y+=p.vy; p.a+=0.1;
               ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.a);
               ctx.fillStyle = ['#ef4444','#f97316','#10b981','#60a5fa'][Math.floor(Math.random()*4)];
-              ctx.fillRect(-p.s/2, -p.s/2, p.s, p.s*2); ctx.restore(); });
-            requestAnimationFrame(tick);} tick();
+              ctx.fillRect(-p.s/2, -p.s/2, p.s, p.s*2);
+              ctx.restore();
+            });
+            requestAnimationFrame(tick);
+          }
+          tick();
           setTimeout(()=>{spawn()}, 600);
         </script>
         """, height=160)
 
-    # Status banner
     st.markdown('<div class="cg-card">', unsafe_allow_html=True)
     status_cls = "status-ok" if total_events > 0 else "status-safe"
     status_text = "Stampede detected" if total_events > 0 else "No stampede detected"
@@ -538,10 +551,10 @@ def render_results(df_frames, df_events, labeled_path):
     )
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Charts
     if not df_frames.empty:
         base = alt.Chart(df_frames).properties(height=240)
         left, right = st.columns(2)
+
         with left:
             st.subheader("CNN Probability")
             line_prob = base.mark_line().encode(
@@ -551,6 +564,7 @@ def render_results(df_frames, df_events, labeled_path):
             )
             thresh = base.mark_rule(strokeDash=[4,4]).encode(y=alt.datum(CNN_THRESHOLD))
             st.altair_chart((line_prob + thresh).interactive(), use_container_width=True)
+
         with right:
             st.subheader("Estimated Head Count")
             line_head = base.mark_line().encode(
@@ -560,7 +574,6 @@ def render_results(df_frames, df_events, labeled_path):
             )
             st.altair_chart(line_head.interactive(), use_container_width=True)
 
-    # Tables + downloads
     if not df_events.empty:
         st.subheader("Detected intervals")
         st.dataframe(df_events, use_container_width=True)
@@ -635,7 +648,7 @@ def render_results(df_frames, df_events, labeled_path):
     if labeled_path and os.path.exists(labeled_path): st.video(labeled_path)
     else: st.info("Preview unavailable.")
 
-# Persisted rerender
+# Re-render persisted results
 if "video_results" in st.session_state:
     _res = st.session_state["video_results"]
     render_results(_res["df_frames"], _res["df_events"], _res.get("labeled_path"))
@@ -650,6 +663,40 @@ uploaded = st.file_uploader(
     label_visibility="collapsed",
 )
 go = st.button("Analyze")
+
+# =============================================================================
+# Tracking utilities (for head-down)
+# =============================================================================
+def update_tracks(tracks, detections, max_dist, window_cap):
+    """Simple nearest-neighbor/Hungarian tracking with short histories."""
+    prev_pts = [t["pos"] for t in tracks]
+    matches, un_prev, un_curr = assign_matches(prev_pts, detections, max_dist)
+
+    # matched: update
+    for i_prev, j_curr in matches:
+        t = tracks[i_prev]
+        t["pos"] = detections[j_curr]
+        t["miss"] = 0
+        t["hist"].append(detections[j_curr])
+        if len(t["hist"]) > window_cap + 2:
+            while len(t["hist"]) > window_cap + 2:
+                t["hist"].popleft()
+
+    # unmatched tracks: age/miss
+    survivors = []
+    for k in un_prev:
+        t = tracks[k]
+        t["miss"] += 1
+        if t["miss"] <= 2:
+            survivors.append(t)
+    # start with matched ones from original list
+    matched_set = {i for i, _ in matches}
+    kept = [tracks[i] for i in range(len(tracks)) if i in matched_set] + survivors
+
+    # new tracks for unmatched detections
+    for j in un_curr:
+        kept.append({"pos": detections[j], "miss": 0, "hist": deque([detections[j]], maxlen=window_cap + 2)})
+    return kept
 
 # =============================================================================
 # Core analysis
@@ -690,21 +737,25 @@ def analyze_video(
     os.makedirs(out_dir, exist_ok=True)
     base  = os.path.splitext(os.path.basename(video_path))[0]
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    raw_path = os.path.join(out_dir, f"{base}_{stamp}_raw.avi")
-    mp4_path = os.path.join(out_dir, f"{base}_{stamp}_labeled.mp4")
-    out = None  # snapshot-only
+    # snapshot-only
+    out = None
+    labeled_path = ""
 
     prev_pts, prev_count = [], None
     in_event, start_f, start_t = False, None, None
     min_event_frames = max(1, int(round(min_event_sec * (fps/step))))
     event_id = 0
 
+    # XAI state
     grid_boxes, cell_w, cell_h = make_grid(W, H, rows=GRID_ROWS, cols=GRID_COLS)
-    prev_counts_zone = np.zeros((GRID_ROWS, GRID_COLS), dtype=int)
     prev_gray_for_flow = None
     events_z_rows = []
     snapshots = []
     current_best = None
+
+    # NEW: track heads over time for head-down
+    tracks = []
+    window_frames = max(1, int(round(HEAD_DOWN_WINDOW_SEC * (fps/step))))
 
     prog = st.progress(0.0); status = st.empty()
     processed = 0; total_steps = (N // step + 1) if N > 0 else 0
@@ -717,6 +768,7 @@ def analyze_video(
         if frame is None:
             current_best = None
             return
+
         x0,y0,x1,y1 = current_best["x0"], current_best["y0"], current_best["x1"], current_best["y1"]
         cv2.rectangle(frame, (x0,y0), (x1,y1), (0,0,255), 3)
         label = (
@@ -725,11 +777,13 @@ def analyze_video(
         )
         cv2.putText(frame, label, (max(6,x0), max(24,y0-6)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2, cv2.LINE_AA)
+
         snap_path = os.path.join(out_dir, f"{base}_{stamp}_event{current_best['event_id']}_snapshot.jpg")
         ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
         if ok:
             tmp_path = snap_path + ".tmp"
-            with open(tmp_path, "wb") as fh: fh.write(buf.tobytes())
+            with open(tmp_path, "wb") as fh:
+                fh.write(buf.tobytes())
             os.replace(tmp_path, snap_path)
             snapshots.append({
                 "event_id": current_best["event_id"],
@@ -757,14 +811,16 @@ def analyze_video(
         ok, frame_bgr = cap.read()
         if not ok: break
         if f % step == 0:
-            # ensure uint8 contiguous grayscale for OpenCV
             gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
             gray = np.ascontiguousarray(gray, dtype=np.uint8)
 
             head_pts = detect_heads_gray(gray, detector)
             curr_count = len(head_pts)
-            matches, _, _ = assign_matches(prev_pts, head_pts, max_match_dist)
 
+            # ---- Update short-term tracks for head-down analysis
+            tracks = update_tracks(tracks, head_pts, max_match_dist, window_frames)
+
+            # legacy global deltas for interval logic
             if prev_count is None:
                 delta, y_heads = 0, 0
             else:
@@ -781,7 +837,7 @@ def analyze_video(
             frames_rows.append((f, t, tc, curr_count, int(delta),
                                 p_cnn, y_cnn, y_heads, final_label))
 
-            # event boundaries
+            # Event handling
             if final_label == 1 and not in_event:
                 in_event, start_f, start_t = True, f, t
                 event_id += 1
@@ -795,18 +851,14 @@ def analyze_video(
                     save_current_best()
                 in_event, start_f, start_t = False, None, None
 
-            # ---------- XAI computations (positive frames) ----------
+            # -------------------- XAI computations (positive frames) --------------------
             if XAI_ENABLED and final_label == 1:
+                # Grad-CAM (tie-breaker only)
                 cam_small = gradcam_heatmap(model, x)
                 cam_up = upscale_cam(cam_small, W, H) if cam_small is not None else None
 
-                counts_now = heads_per_cell(head_pts, GRID_ROWS, GRID_COLS, cell_w, cell_h)
-                delta_zone = prev_counts_zone - counts_now
-                prev_counts_zone = counts_now
-
-                # Robust Farnebäck (downward-only)
+                # Downward optical flow (also tie-breaker)
                 if FLOW_ENABLED:
-                    # reset flow if shape mismatch or first use
                     if prev_gray_for_flow is None or prev_gray_for_flow.shape != gray.shape:
                         down_mag = np.zeros((H, W), dtype=np.float32)
                     else:
@@ -823,36 +875,72 @@ def analyze_video(
                 else:
                     down_mag = np.zeros((H, W), dtype=np.float32)
 
-                max_heads_now = max(1.0, float(counts_now.max()))
                 mean_flow = float(down_mag.mean()) + 1e-6
 
-                # score each cell
+                # Grid scoring by HEAD-DOWN
                 cell_records = []
-                for ((x0,y0,x1,y1), cell_id) in grid_boxes:
-                    cnn_cell = float(cam_up[y0:y1, x0:x1].mean()) if cam_up is not None else 0.0
-                    r_idx = min(GRID_ROWS-1, max(0, y0 // max(1, cell_h)))
-                    c_idx = min(GRID_COLS-1, max(0, x0 // max(1, cell_w)))
-                    drop_cell = max(0.0, float(delta_zone[r_idx, c_idx]))
-                    fmag_cell = float(down_mag[y0:y1, x0:x1].mean())
-                    risk = (W_CAM * cnn_cell
-                            + W_DROP * (drop_cell / max_heads_now)
-                            + W_FLOW * (fmag_cell / mean_flow))
-                    cell_records.append({
-                        "cell_id": cell_id, "x0": x0, "y0": y0, "x1": x1, "y1": y1,
-                        "cnn": cnn_cell, "drop": drop_cell, "flow": fmag_cell, "risk": float(risk)
-                    })
+                counts_now = np.zeros((GRID_ROWS, GRID_COLS), dtype=int)
+                down_counts = np.zeros((GRID_ROWS, GRID_COLS), dtype=int)
+                max_dy_norm = np.zeros((GRID_ROWS, GRID_COLS), dtype=float)
 
-                cands = [i for i,c in enumerate(cell_records)
-                         if (c["drop"] >= DROP_GATE) or ((c["flow"]/mean_flow) >= FLOW_GATE)]
+                for tinfo in tracks:
+                    (xh, yh) = tinfo["pos"]
+                    c = min(GRID_COLS-1, max(0, int(xh // max(1, W // GRID_COLS))))
+                    r = min(GRID_ROWS-1, max(0, int(yh // max(1, H // GRID_ROWS))))
+                    counts_now[r, c] += 1
+
+                    # compute vertical drop over window
+                    if len(tinfo["hist"]) >= (window_frames + 1):
+                        y_then = tinfo["hist"][max(0, len(tinfo["hist"]) - 1 - window_frames)][1]
+                        dy = (yh - y_then)  # positive = moving down in image coordinates
+                        dy_norm = float(dy) / max(1.0, float(H))
+                        if dy_norm >= HEAD_DOWN_MIN_DY_FRAC:
+                            down_counts[r, c] += 1
+                            if dy_norm > max_dy_norm[r, c]:
+                                max_dy_norm[r, c] = dy_norm
+
+                for r in range(GRID_ROWS):
+                    for c in range(GRID_COLS):
+                        x0, y0, x1, y1 = (c*(W//GRID_COLS), r*(H//GRID_ROWS),
+                                          W if c==GRID_COLS-1 else (c+1)*(W//GRID_COLS),
+                                          H if r==GRID_ROWS-1 else (r+1)*(H//GRID_ROWS))
+                        total_heads = max(1, counts_now[r, c])
+                        frac_down   = float(down_counts[r, c]) / float(total_heads)
+                        # head-down score: count normalized + size of biggest drop,
+                        # penalized if too many heads in cell also dropped (we want "one head goes down")
+                        hd_score = (down_counts[r, c] / float(total_heads)) + max_dy_norm[r, c]
+                        hd_score *= (1.0 - min(1.0, max(0.0, frac_down - 0.15)) * HEAD_DOWN_GROUP_PENALTY)
+
+                        cnn_cell  = float(cam_up[y0:y1, x0:x1].mean()) if cam_up is not None else 0.0
+                        flow_norm = float(down_mag[y0:y1, x0:x1].mean()) / mean_flow
+
+                        risk = (W_HEADDOWN * hd_score) + (W_FLOW * flow_norm) + (W_CAM * cnn_cell)
+
+                        cell_records.append({
+                            "cell_id": f"r{r}c{c}",
+                            "x0": x0, "y0": y0, "x1": x1, "y1": y1,
+                            "risk": float(risk),
+                            "hd_score": float(hd_score),
+                            "down_count": int(down_counts[r, c]),
+                            "max_dy_norm": float(max_dy_norm[r, c]),
+                            "flow_norm": float(flow_norm),
+                            "cnn_cell": float(cnn_cell),
+                            "total_heads": int(counts_now[r, c]),
+                        })
+
+                # candidate gating: prefer cells with at least one head-down
+                cands = [i for i,c in enumerate(cell_records) if c["down_count"] >= 1]
                 if cands:
                     best_i = max(cands, key=lambda i: cell_records[i]["risk"])
                 else:
+                    # fallback to overall risk if no down head detected this frame
                     best_i = max(range(len(cell_records)), key=lambda i: cell_records[i]["risk"])
 
                 best = cell_records[best_i]
                 bx0,by0,bx1,by1 = best["x0"], best["y0"], best["x1"], best["y1"]
                 best_risk = best["risk"]
 
+                # keep best snapshot within event
                 if (current_best is None) or (best_risk > float(current_best["risk_score"])):
                     current_best = {
                         "event_id": event_id,
@@ -864,12 +952,18 @@ def analyze_video(
                         "risk_score": best_risk
                     }
 
+                # log per-cell components
                 for cell in cell_records:
                     events_z_rows.append({
                         "event_id": event_id, "frame": f, "timecode": tc, "zone_id": cell["cell_id"],
                         "x0": cell["x0"], "y0": cell["y0"], "x1": cell["x1"], "y1": cell["y1"],
-                        "risk_score": cell["risk"], "cnn_cell": cell["cnn"],
-                        "drop_cell": cell["drop"], "flow_down_cell": cell["flow"]
+                        "risk_score": cell["risk"],
+                        "head_down_score": cell["hd_score"],
+                        "down_count": cell["down_count"],
+                        "max_dy_norm": cell["max_dy_norm"],
+                        "flow_norm": cell["flow_norm"],
+                        "cnn_cell": cell["cnn_cell"],
+                        "heads_in_cell": cell["total_heads"],
                     })
 
             prev_pts, prev_count = head_pts, curr_count
@@ -880,6 +974,7 @@ def analyze_video(
                 status.write(f"Processed {processed}/{total_steps} sampled frames…")
         f += 1
 
+    # close final event
     if in_event and start_f is not None:
         end_t = (f-1) / fps
         events_rows.append((start_f, f-1, start_t, end_t,
@@ -893,11 +988,14 @@ def analyze_video(
     df_events = pd.DataFrame(events_rows[1:], columns=events_rows[0])
 
     df_events_zones = pd.DataFrame(events_z_rows) if events_z_rows else pd.DataFrame(
-        columns=["event_id","frame","timecode","zone_id","x0","y0","x1","y1",
-                 "risk_score","cnn_cell","drop_cell","flow_down_cell"]
+        columns=[
+            "event_id","frame","timecode","zone_id","x0","y0","x1","y1",
+            "risk_score","head_down_score","down_count","max_dy_norm",
+            "flow_norm","cnn_cell","heads_in_cell"
+        ]
     )
     st.session_state["video_xai"] = {"events_zones": df_events_zones, "snapshots": snapshots}
-    return df_frames, df_events, ""  # snapshot mode => no video
+    return df_frames, df_events, labeled_path  # snapshot mode => no video
 
 # =============================================================================
 # Run
