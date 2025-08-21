@@ -20,10 +20,6 @@ from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import urllib.request, hashlib
 import streamlit.components.v1 as components
 
-# NEW: Robust snapshot display helpers
-from PIL import Image, ImageFile
-ImageFile.LOAD_TRUNCATED_IMAGES = True  # tolerate truncated JPEGs
-
 # =============================================================================
 # App config
 # =============================================================================
@@ -450,7 +446,7 @@ def heads_per_cell(head_pts, rows, cols, cell_w, cell_h):
         counts[r, c] += 1
     return counts
 
-# ---- Robust display utilities (avoid TypeError in st.image) ----
+# ---- Robust display/load utilities (avoid TypeError in st.image) ----
 def _safe_float(x, default=0.0):
     try:
         if isinstance(x, (list, tuple, np.ndarray)):
@@ -459,20 +455,19 @@ def _safe_float(x, default=0.0):
     except Exception:
         return default
 
-def _open_image_for_streamlit(path: str):
+def _load_image_rgb(path: str):
+    """Load image as uint8 RGB numpy array (prefers OpenCV). Return None if unreadable."""
     try:
-        im = Image.open(path)
-        im.load()
-        return im
-    except Exception:
-        return None
-
-def _image_as_data_uri(path: str):
-    try:
-        import base64
-        with open(path, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode("ascii")
-        return f'<img src="data:image/jpeg;base64,{b64}" style="width:100%;border-radius:12px"/>'
+        data = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
+        # (np.fromfile handles non-ASCII paths on some systems)
+        if data is None:
+            data = cv2.imread(path, cv2.IMREAD_COLOR)
+        if data is None:
+            return None
+        rgb = cv2.cvtColor(data, cv2.COLOR_BGR2RGB)
+        if rgb.dtype != np.uint8:
+            rgb = np.clip(rgb, 0, 255).astype(np.uint8)
+        return rgb
     except Exception:
         return None
 
@@ -601,7 +596,6 @@ def render_results(df_frames, df_events, labeled_path):
                            file_name="frame_preds.csv", mime="text/csv",
                            use_container_width=True, key=f"dl_frames_{uid}")
     with c3:
-        # UI unchanged: offer video if present; otherwise same disabled button as before.
         if labeled_path and os.path.exists(labeled_path) and os.path.getsize(labeled_path) > 0:
             with open(labeled_path, "rb") as fh:
                 st.download_button("⬇️ labeled.mp4", fh.read(), file_name=os.path.basename(labeled_path),
@@ -618,7 +612,7 @@ def render_results(df_frames, df_events, labeled_path):
                            file_name="events_zones.csv", mime="text/csv",
                            use_container_width=True, key=f"dl_events_z_{uid}")
 
-    # NEW: Event snapshots list (robust, but keeps your design)
+    # Event snapshots (robust: always pass RGB np.array to st.image)
     snapshots = extra.get("snapshots", [])
     if snapshots:
         st.markdown('<h2 class="cg-h2">Event Snapshots (red-marked zone)</h2>', unsafe_allow_html=True)
@@ -627,20 +621,14 @@ def render_results(df_frames, df_events, labeled_path):
             path = s.get("path") or ""
             risk = _safe_float(s.get("risk_score", 0.0), 0.0)
             caption = f"Event {s.get('event_id','?')} • frame {s.get('frame_index','?')} • {s.get('timecode','?')} • {s.get('zone_id','?')} (risk {risk:.2f})"
-
             if isinstance(path, str) and os.path.exists(path) and os.path.getsize(path) > 0:
-                im = _open_image_for_streamlit(path)
+                img = _load_image_rgb(path)
                 col1, col2 = st.columns([2,1])
                 with col1:
-                    if im is not None:
-                        st.image(im, caption=caption, use_container_width=True)
+                    if isinstance(img, np.ndarray) and img.ndim == 3 and img.dtype == np.uint8:
+                        st.image(img, caption=caption, channels="RGB", use_container_width=True)
                     else:
-                        html = _image_as_data_uri(path)
-                        if html:
-                            st.markdown(html, unsafe_allow_html=True)
-                            st.caption(caption)
-                        else:
-                            st.warning(f"Snapshot could not be displayed (event {s.get('event_id','?')}).")
+                        st.warning(f"Snapshot could not be displayed (event {s.get('event_id','?')}).")
                 with col2:
                     with open(path, "rb") as fh:
                         st.download_button("⬇️ Download snapshot", fh.read(),
@@ -664,7 +652,7 @@ def render_results(df_frames, df_events, labeled_path):
                            file_name="event_snapshots.csv", mime="text/csv",
                            use_container_width=True)
 
-    # Keep your original "Labeled Video Preview" section (will show unavailable)
+    # Keep your original "Labeled Video Preview" section
     st.markdown('<h2 class="cg-h2">Labeled Video Preview</h2>', unsafe_allow_html=True)
     if labeled_path and os.path.exists(labeled_path): st.video(labeled_path)
     else: st.info("Preview unavailable.")
@@ -727,7 +715,7 @@ def analyze_video(
     raw_path = os.path.join(out_dir, f"{base}_{stamp}_raw.avi")
     mp4_path = os.path.join(out_dir, f"{base}_{stamp}_labeled.mp4")
 
-    # Snapshot mode: don't open a video writer
+    # Snapshot mode: no video writer
     out = None
 
     prev_pts, prev_count = [], None
@@ -887,14 +875,12 @@ def analyze_video(
                             "risk_score": best_risk
                         }
 
-                # Buffer rows for events_zones.csv (optional analysis)
+                # Buffer rows for events_zones.csv
                 for (cell_id, x0, y0, x1, y1, risk) in scores_flat:
                     events_z_rows.append({
                         "event_id": event_id, "frame": f, "timecode": tc, "zone_id": cell_id,
                         "x0": x0, "y0": y0, "x1": x1, "y1": y1, "risk_score": risk
                     })
-
-            # overlay video skipped in snapshot mode
 
             prev_pts, prev_count = head_pts, curr_count
 
@@ -938,7 +924,7 @@ if go:
         with st.spinner("Analyzing video…"):
             df_frames, df_events, labeled_path = analyze_video(tmp.name, model)
 
-        # -------- Persist results so any rerun (e.g., downloads) keeps the view --------
+        # Persist results so reruns keep the view
         st.session_state["video_results"] = {
             "df_frames": df_frames,
             "df_events": df_events,
