@@ -44,12 +44,14 @@ DRAW_LINKS    = True
 TARGET_FPS    = None  # None = use every frame
 
 # ---------- XAI / Snapshot settings ----------
-XAI_ENABLED   = True        # Grad-CAM + zone risk
-GRID_ROWS     = 4
-GRID_COLS     = 4
-W_CAM, W_DROP, W_FLOW = 0.5, 0.4, 0.1
-FLOW_ENABLED  = False       # set True to include optical flow
-SNAPSHOT_ONLY = True        # ✅ Save one red-marked frame per event; no full overlay video
+XAI_ENABLED   = True           # Grad-CAM + zone risk
+GRID_ROWS     = 6              # ↑ finer grid to localize collapses
+GRID_COLS     = 6
+W_CAM, W_DROP, W_FLOW = 0.30, 0.45, 0.25   # give real weight to drop & motion
+FLOW_ENABLED  = True           # ✅ include optical flow
+DROP_GATE     = 1              # require >=1 head drop in a cell OR ...
+FLOW_GATE     = 0.30           # ... downward flow >= 0.30× mean
+SNAPSHOT_ONLY = True           # ✅ Save one red-marked frame per event; no full overlay video
 
 # ---------- Model location ----------
 APP_DIR = Path(__file__).resolve().parent
@@ -304,7 +306,7 @@ def build_blob_detector(frame_w, frame_h, min_frac=MIN_FRAC, max_frac=MAX_FRAC,
     p.minThreshold, p.maxThreshold, p.thresholdStep = 10, 220, thresh_step
     p.filterByArea, p.minArea, p.maxArea = True, minArea, maxArea
     p.filterByCircularity, p.minCircularity = True, min_circ
-    p.filterByInertia, p.minInertiaRatio = True, min_inertia
+    p.filterByInertia, p.minInertiaRatio = True, min_iner
     p.filterByConvexity = p.filterByColor = False
     return (cv2.SimpleBlobDetector(p) if int(cv2.__version__.split('.')[0]) < 3
             else cv2.SimpleBlobDetector_create(p))
@@ -424,7 +426,7 @@ def upscale_cam(cam_small, W, H):
         return None
     return cv2.resize(cam_small, (W, H), interpolation=cv2.INTER_CUBIC)
 
-def make_grid(W, H, rows=4, cols=4):
+def make_grid(W, H, rows=6, cols=6):
     cell_w, cell_h = W // cols, H // rows
     boxes = []
     for r in range(rows):
@@ -753,7 +755,6 @@ def analyze_video(
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2, cv2.LINE_AA)
 
         snap_path = os.path.join(out_dir, f"{base}_{stamp}_event{current_best['event_id']}_snapshot.jpg")
-        # Atomic JPEG write
         ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
         if ok:
             tmp_path = snap_path + ".tmp"
@@ -824,62 +825,79 @@ def analyze_video(
 
             # -------------------- XAI computations (positive frames) --------------------
             if XAI_ENABLED and final_label == 1:
+                # Grad-CAM (on 100x100 input) -> upscale to frame size
                 cam_small = gradcam_heatmap(model, x)
                 cam_up = upscale_cam(cam_small, W, H) if cam_small is not None else None
+
+                # Per-cell head counts & drop
                 counts_now = heads_per_cell(head_pts, GRID_ROWS, GRID_COLS, cell_w, cell_h)
                 delta_zone = prev_counts_zone - counts_now
                 prev_counts_zone = counts_now
 
+                # Optical flow (downward-only magnitude)
                 if FLOW_ENABLED:
                     if prev_gray_for_flow is None:
-                        flow_mag = np.zeros((H, W), dtype=np.float32)
+                        down_mag = np.zeros((H, W), dtype=np.float32)
                     else:
                         flow = cv2.calcOpticalFlowFarneback(prev_gray_for_flow, gray,
                                                             pyr_scale=0.5, levels=3, winsize=15,
                                                             iterations=3, poly_n=5, poly_sigma=1.2, flags=0)
-                        flow_mag = np.sqrt(flow[...,0]**2 + flow[...,1]**2).astype(np.float32)
+                        vy = flow[..., 1]
+                        down_mag = np.maximum(vy, 0.0).astype(np.float32)
                     prev_gray_for_flow = gray.copy()
                 else:
-                    flow_mag = np.zeros((H, W), dtype=np.float32)
+                    down_mag = np.zeros((H, W), dtype=np.float32)
 
                 max_heads_now = max(1.0, float(counts_now.max()))
-                mean_flow = float(flow_mag.mean()) if FLOW_ENABLED else 1.0
+                mean_flow = float(down_mag.mean()) + 1e-6
 
-                zone_scores = []
-                scores_flat = []
+                # Score each cell
+                cell_records = []
                 for ((x0,y0,x1,y1), cell_id) in grid_boxes:
                     cnn_cell = float(cam_up[y0:y1, x0:x1].mean()) if cam_up is not None else 0.0
                     r_idx = min(GRID_ROWS-1, max(0, y0 // max(1, cell_h)))
                     c_idx = min(GRID_COLS-1, max(0, x0 // max(1, cell_w)))
                     drop_cell = max(0.0, float(delta_zone[r_idx, c_idx]))
-                    fmag_cell = float(flow_mag[y0:y1, x0:x1].mean()) if FLOW_ENABLED else 0.0
+                    fmag_cell = float(down_mag[y0:y1, x0:x1].mean())
                     risk = (W_CAM * cnn_cell
                             + W_DROP * (drop_cell / max_heads_now)
-                            + W_FLOW * (fmag_cell / (mean_flow + 1e-6)))
-                    zone_scores.append(risk)
-                    scores_flat.append((cell_id, x0, y0, x1, y1, float(risk)))
+                            + W_FLOW * (fmag_cell / mean_flow))
+                    cell_records.append({
+                        "cell_id": cell_id, "x0": x0, "y0": y0, "x1": x1, "y1": y1,
+                        "cnn": cnn_cell, "drop": drop_cell, "flow": fmag_cell, "risk": float(risk)
+                    })
 
-                # Track best snapshot frame
-                if zone_scores:
-                    best_i = int(np.argmax(zone_scores))
-                    (bx0,by0,bx1,by1), bcell = grid_boxes[best_i]
-                    best_risk = float(zone_scores[best_i])
-                    if (current_best is None) or (best_risk > float(current_best["risk_score"])):
-                        current_best = {
-                            "event_id": event_id,
-                            "frame": frame_bgr.copy(),
-                            "frame_index": f,
-                            "timecode": tc,
-                            "zone_id": bcell,
-                            "x0": bx0, "y0": by0, "x1": bx1, "y1": by1,
-                            "risk_score": best_risk
-                        }
+                # Gated candidate set: local drop or strong downward flow
+                cands = [i for i,c in enumerate(cell_records)
+                         if (c["drop"] >= DROP_GATE) or ((c["flow"]/mean_flow) >= FLOW_GATE)]
+                if cands:
+                    best_i = max(cands, key=lambda i: cell_records[i]["risk"])
+                else:
+                    best_i = max(range(len(cell_records)), key=lambda i: cell_records[i]["risk"])
 
-                # Buffer rows for events_zones.csv
-                for (cell_id, x0, y0, x1, y1, risk) in scores_flat:
+                best = cell_records[best_i]
+                bx0,by0,bx1,by1 = best["x0"], best["y0"], best["x1"], best["y1"]
+                best_risk = best["risk"]
+
+                # Track best snapshot frame within event
+                if (current_best is None) or (best_risk > float(current_best["risk_score"])):
+                    current_best = {
+                        "event_id": event_id,
+                        "frame": frame_bgr.copy(),
+                        "frame_index": f,
+                        "timecode": tc,
+                        "zone_id": best["cell_id"],
+                        "x0": bx0, "y0": by0, "x1": bx1, "y1": by1,
+                        "risk_score": best_risk
+                    }
+
+                # Buffer rows for events_zones.csv with components for XAI
+                for cell in cell_records:
                     events_z_rows.append({
-                        "event_id": event_id, "frame": f, "timecode": tc, "zone_id": cell_id,
-                        "x0": x0, "y0": y0, "x1": x1, "y1": y1, "risk_score": risk
+                        "event_id": event_id, "frame": f, "timecode": tc, "zone_id": cell["cell_id"],
+                        "x0": cell["x0"], "y0": cell["y0"], "x1": cell["x1"], "y1": cell["y1"],
+                        "risk_score": cell["risk"], "cnn_cell": cell["cnn"],
+                        "drop_cell": cell["drop"], "flow_down_cell": cell["flow"]
                     })
 
             prev_pts, prev_count = head_pts, curr_count
@@ -905,7 +923,8 @@ def analyze_video(
 
     # Build events_zones DataFrame for download (if any)
     df_events_zones = pd.DataFrame(events_z_rows) if events_z_rows else pd.DataFrame(
-        columns=["event_id","frame","timecode","zone_id","x0","y0","x1","y1","risk_score"]
+        columns=["event_id","frame","timecode","zone_id","x0","y0","x1","y1",
+                 "risk_score","cnn_cell","drop_cell","flow_down_cell"]
     )
     st.session_state["video_xai"] = {"events_zones": df_events_zones, "snapshots": snapshots}
     return df_frames, df_events, ""  # snapshot mode => no video
