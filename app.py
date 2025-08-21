@@ -362,13 +362,41 @@ def transcode_to_h264(src_path: str, dst_path: str, fps: float):
 def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
     """
     Robust Grad-CAM for Keras 3 / TF 2.20:
-    - If conv_layer_name is given, use it (only if rank-4 output is accessible).
-    - Else, auto-pick the LAST layer whose output is rank-4 (feature map).
-    - If no suitable layer is found or gradients fail, return None.
+    - Handles model outputs that are tensor/list/tuple/dict and 1D/2D shapes.
+    - If conv_layer_name is given and valid (rank-4 output), uses it.
+    - Else, auto-picks the last layer with a rank-4 (H,W,C) output.
+    Returns a CAM array in [0,1] or None if unavailable.
     """
     import tensorflow as tf
 
-    # Try the user-specified layer first
+    # Helper to pick / normalize the score tensor (batch vector)
+    def _select_score_vector(preds_any):
+        t = preds_any
+        if isinstance(t, dict):
+            # take first value deterministically
+            t = t[sorted(t.keys())[0]]
+        if isinstance(t, (list, tuple)):
+            t = t[0]
+        t = tf.convert_to_tensor(t)
+        rank = t.shape.rank
+        if rank is None:
+            # fallback: flatten
+            t2 = tf.reshape(t, (tf.shape(t)[0], -1))
+            return t2[:, -1]
+        if rank == 1:
+            return t  # (B,)
+        if rank == 2:
+            # (B, C). If C==1, squeeze; else use last channel as "positive" class.
+            c = t.shape[-1]
+            if c == 1:
+                return tf.squeeze(t, axis=-1)  # (B,)
+            else:
+                return t[:, -1]  # (B,)
+        # higher ranks: flatten to (B, -1) and take last column
+        t2 = tf.reshape(t, (tf.shape(t)[0], -1))
+        return t2[:, -1]
+
+    # Choose target conv layer
     target_layer = None
     if conv_layer_name is not None:
         try:
@@ -379,8 +407,8 @@ def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
         except Exception:
             target_layer = None
 
-    # Auto-pick: last layer with rank-4 output
     if target_layer is None:
+        # auto-pick last layer with 4D output
         for L in reversed(model.layers):
             try:
                 out = L.output
@@ -393,7 +421,7 @@ def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
     if target_layer is None:
         return None  # no usable feature map
 
-    # Build a gradient model safely (inputs/outputs API variation)
+    # Build gradient model safely
     try:
         grad_model = tf.keras.Model(inputs=model.input,
                                     outputs=[target_layer.output, model.output])
@@ -403,15 +431,14 @@ def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
 
     with tf.GradientTape() as tape:
         conv_out, preds = grad_model(x_100x100x1, training=False)
-        # Binary classifier: take score for positive class (adjust if needed)
-        score = preds[:, 0]
+        score_vec = _select_score_vector(preds)  # (B,)
 
-    grads = tape.gradient(score, conv_out)
+    grads = tape.gradient(score_vec, conv_out)
     if grads is None:
         return None
 
-    weights = tf.reduce_mean(grads, axis=(1, 2), keepdims=True)   # (1,1,1,c)
-    cam = tf.nn.relu(tf.reduce_sum(weights * conv_out, axis=-1))  # (1,h,w)
+    weights = tf.reduce_mean(grads, axis=(1, 2), keepdims=True)   # (B,1,1,C)
+    cam = tf.nn.relu(tf.reduce_sum(weights * conv_out, axis=-1))  # (B,h,w)
     cam = cam[0].numpy()
     denom = (cam.max() - cam.min())
     cam = (cam - cam.min()) / (denom + 1e-8)
@@ -447,7 +474,7 @@ def draw_top_cells(vis_bgr, grid_boxes, scores, K=3):
         (x0, y0, x1, y1), cell_id = grid_boxes[i]
         cv2.rectangle(vis_bgr, (x0, y0), (x1, y1), (0, 0, 255), 2)
         cv2.putText(vis_bgr, f"{cell_id}:{scores[i]:.2f}", (x0+6, y0+18),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1, cv2.LINE_AA)
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1, cv2.LINE_AA)
 
 # =============================================================================
 # Load model (silent) + status
