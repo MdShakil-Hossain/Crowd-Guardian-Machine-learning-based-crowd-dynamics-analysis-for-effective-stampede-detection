@@ -166,29 +166,24 @@ st.markdown(
 components.html("""
 <canvas id="cg-bg"></canvas>
 <style>
-  #cg-bg{position:fixed; inset:0; z-index:-2; background:transparent;}
+  #cg-bg{position:fixed, inset:0; z-index:-2; background:transparent;}
 </style>
 <script>
   const c = document.getElementById('cg-bg'), ctx = c.getContext('2d');
   function resize(){ c.width = innerWidth; c.height = innerHeight; }
   addEventListener('resize', resize); resize();
-
   const N = 120;
   const P = Array.from({length:N}, () => ({
-    x: Math.random()*c.width,
-    y: Math.random()*c.height,
-    vx: -0.25 + Math.random()*0.5,
-    vy: -0.25 + Math.random()*0.5,
+    x: Math.random()*c.width, y: Math.random()*c.height,
+    vx: -0.25 + Math.random()*0.5, vy: -0.25 + Math.random()*0.5,
     s: 0.6 + Math.random()*1.6
   }));
-
   function tick(){
     ctx.clearRect(0,0,c.width,c.height);
     P.forEach(p=>{
       p.x += p.vx; p.y += p.vy;
       if(p.x<0) p.x=c.width; if(p.x>c.width) p.x=0;
       if(p.y<0) p.y=c.height; if(p.y>c.height) p.y=0;
-
       const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 6+p.s*2);
       g.addColorStop(0, 'rgba(255,255,255,0.8)');
       g.addColorStop(1, 'rgba(255,255,255,0)');
@@ -306,7 +301,6 @@ def build_blob_detector(frame_w, frame_h, min_frac=MIN_FRAC, max_frac=MAX_FRAC,
     p.minThreshold, p.maxThreshold, p.thresholdStep = 10, 220, thresh_step
     p.filterByArea, p.minArea, p.maxArea = True, minArea, maxArea
     p.filterByCircularity, p.minCircularity = True, min_circ
-    # ✅ FIX: use the correct parameter name "min_inertia"
     p.filterByInertia, p.minInertiaRatio = True, min_inertia
     p.filterByConvexity = p.filterByColor = False
     return (cv2.SimpleBlobDetector(p) if int(cv2.__version__.split('.')[0]) < 3
@@ -446,7 +440,7 @@ def heads_per_cell(head_pts, rows, cols, cell_w, cell_h):
         counts[r, c] += 1
     return counts
 
-# ---- Snapshot display helper: tries st.image(np array), fallback to base64 <img> ----
+# ---- Snapshot display helper ----
 def _show_image_resilient(path: str, caption: str) -> bool:
     try:
         data = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
@@ -457,7 +451,7 @@ def _show_image_resilient(path: str, caption: str) -> bool:
         rgb = cv2.cvtColor(data, cv2.COLOR_BGR2RGB)
         rgb = np.clip(rgb, 0, 255).astype(np.uint8)
         try:
-            st.image(rgb, caption=caption, use_container_width=True)   # preferred path
+            st.image(rgb, caption=caption, use_container_width=True)
             return True
         except Exception:
             ok, buf = cv2.imencode(".png", data)
@@ -493,7 +487,7 @@ if load_err:
     st.caption(load_err)
 
 # =============================================================================
-# (NEW) Re-render persisted results so downloads don't clear the page
+# Re-render persisted results
 # =============================================================================
 def render_results(df_frames, df_events, labeled_path):
     st.markdown('<h2 class="cg-h2">Results</h2>', unsafe_allow_html=True)
@@ -507,7 +501,7 @@ def render_results(df_frames, df_events, labeled_path):
     c2.metric("Total Duration (s)", f"{total_dur:.2f}")
     c3.metric("Longest Event (s)", f"{longest:.2f}")
 
-    # Confetti if detected
+    # Confetti
     if total_events > 0:
         components.html("""
         <canvas id="c"></canvas>
@@ -516,34 +510,25 @@ def render_results(df_frames, df_events, labeled_path):
              background:linear-gradient(90deg, rgba(16,185,129,.18), rgba(239,68,68,.18));}
         </style>
         <script>
-          const canvas = document.getElementById('c');
-          const ctx = canvas.getContext('2d');
+          const canvas = document.getElementById('c'); const ctx = canvas.getContext('2d');
           function resize(){canvas.width=canvas.clientWidth; canvas.height=140;}
           window.addEventListener('resize', resize); resize();
-          const confetti = [];
-          function spawn(){for(let i=0;i<50;i++){confetti.push({
+          const confetti = []; function spawn(){for(let i=0;i<50;i++){confetti.push({
             x: Math.random()*canvas.width, y: -10 - Math.random()*30,
             vx: (Math.random()-0.5)*1.5, vy: 1+Math.random()*2.5,
             s: 2+Math.random()*3, a: Math.random()*Math.PI
-          });}}
-          spawn();
-          function tick(){
-            ctx.clearRect(0,0,canvas.width,canvas.height);
-            confetti.forEach(p=>{
-              p.x+=p.vx; p.y+=p.vy; p.a+=0.1;
+          });}} spawn();
+          function tick(){ ctx.clearRect(0,0,canvas.width,canvas.height);
+            confetti.forEach(p=>{ p.x+=p.vx; p.y+=p.vy; p.a+=0.1;
               ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.a);
               ctx.fillStyle = ['#ef4444','#f97316','#10b981','#60a5fa'][Math.floor(Math.random()*4)];
-              ctx.fillRect(-p.s/2, -p.s/2, p.s, p.s*2);
-              ctx.restore();
-            });
-            requestAnimationFrame(tick);
-          }
-          tick();
+              ctx.fillRect(-p.s/2, -p.s/2, p.s, p.s*2); ctx.restore(); });
+            requestAnimationFrame(tick);} tick();
           setTimeout(()=>{spawn()}, 600);
         </script>
         """, height=160)
 
-    # Status banner (only)
+    # Status banner
     st.markdown('<div class="cg-card">', unsafe_allow_html=True)
     status_cls = "status-ok" if total_events > 0 else "status-safe"
     status_text = "Stampede detected" if total_events > 0 else "No stampede detected"
@@ -557,7 +542,6 @@ def render_results(df_frames, df_events, labeled_path):
     if not df_frames.empty:
         base = alt.Chart(df_frames).properties(height=240)
         left, right = st.columns(2)
-
         with left:
             st.subheader("CNN Probability")
             line_prob = base.mark_line().encode(
@@ -567,7 +551,6 @@ def render_results(df_frames, df_events, labeled_path):
             )
             thresh = base.mark_rule(strokeDash=[4,4]).encode(y=alt.datum(CNN_THRESHOLD))
             st.altair_chart((line_prob + thresh).interactive(), use_container_width=True)
-
         with right:
             st.subheader("Estimated Head Count")
             line_head = base.mark_line().encode(
@@ -587,9 +570,7 @@ def render_results(df_frames, df_events, labeled_path):
     st.subheader("Per-frame predictions")
     st.dataframe(df_frames.head(1000), use_container_width=True)
 
-    # Stable keys so reruns don't duplicate widgets
     uid = os.path.splitext(os.path.basename(labeled_path or "na.mp4"))[0] if labeled_path else "na"
-
     c1, c2, c3 = st.columns(3)
     with c1:
         st.download_button("⬇️ events.csv", df_events.to_csv(index=False).encode("utf-8"),
@@ -607,7 +588,6 @@ def render_results(df_frames, df_events, labeled_path):
         else:
             st.button("Video unavailable", disabled=True, use_container_width=True, key=f"dl_na_{uid}")
 
-    # Extra download if XAI ran
     extra = st.session_state.get("video_xai", {})
     df_events_zones = extra.get("events_zones")
     if isinstance(df_events_zones, pd.DataFrame) and not df_events_zones.empty:
@@ -616,7 +596,6 @@ def render_results(df_frames, df_events, labeled_path):
                            file_name="events_zones.csv", mime="text/csv",
                            use_container_width=True, key=f"dl_events_z_{uid}")
 
-    # --- Event Snapshots (red-marked zone) ---
     snapshots = extra.get("snapshots", [])
     if snapshots:
         st.markdown('<h2 class="cg-h2">Event Snapshots (red-marked zone)</h2>', unsafe_allow_html=True)
@@ -625,7 +604,6 @@ def render_results(df_frames, df_events, labeled_path):
             path = s.get("path") or ""
             risk = float(s.get("risk_score", 0.0)) if s.get("risk_score", None) is not None else 0.0
             caption = f"Event {s.get('event_id','?')} • frame {s.get('frame_index','?')} • {s.get('timecode','?')} • {s.get('zone_id','?')} (risk {risk:.2f})"
-
             if isinstance(path, str) and os.path.exists(path) and os.path.getsize(path) > 0:
                 col1, col2 = st.columns([2,1])
                 with col1:
@@ -639,15 +617,13 @@ def render_results(df_frames, df_events, labeled_path):
                                            mime="image/jpeg", use_container_width=True)
             else:
                 st.warning(f"Snapshot file missing for event {s.get('event_id','?')} (path: {path})")
-
             snap_rows.append({
                 "event_id": s.get("event_id"),
                 "frame_index": s.get("frame_index"),
                 "timecode": s.get("timecode"),
                 "zone_id": s.get("zone_id"),
                 "x0": s.get("x0"), "y0": s.get("y0"), "x1": s.get("x1"), "y1": s.get("y1"),
-                "risk_score": risk,
-                "path": path,
+                "risk_score": risk, "path": path,
             })
         df_snaps = pd.DataFrame(snap_rows)
         st.download_button("⬇️ event_snapshots.csv",
@@ -655,12 +631,11 @@ def render_results(df_frames, df_events, labeled_path):
                            file_name="event_snapshots.csv", mime="text/csv",
                            use_container_width=True)
 
-    # Keep your original "Labeled Video Preview" section
     st.markdown('<h2 class="cg-h2">Labeled Video Preview</h2>', unsafe_allow_html=True)
     if labeled_path and os.path.exists(labeled_path): st.video(labeled_path)
     else: st.info("Preview unavailable.")
 
-# ---- Re-render results from session on EVERY run (prevents ‘refresh’ loss)
+# Persisted rerender
 if "video_results" in st.session_state:
     _res = st.session_state["video_results"]
     render_results(_res["df_frames"], _res["df_events"], _res.get("labeled_path"))
@@ -717,22 +692,19 @@ def analyze_video(
     stamp = time.strftime("%Y%m%d-%H%M%S")
     raw_path = os.path.join(out_dir, f"{base}_{stamp}_raw.avi")
     mp4_path = os.path.join(out_dir, f"{base}_{stamp}_labeled.mp4")
-
-    # Snapshot mode: no video writer
-    out = None
+    out = None  # snapshot-only
 
     prev_pts, prev_count = [], None
     in_event, start_f, start_t = False, None, None
     min_event_frames = max(1, int(round(min_event_sec * (fps/step))))
-    event_id = 0  # XAI: running event index
+    event_id = 0
 
-    # XAI state
     grid_boxes, cell_w, cell_h = make_grid(W, H, rows=GRID_ROWS, cols=GRID_COLS)
     prev_counts_zone = np.zeros((GRID_ROWS, GRID_COLS), dtype=int)
     prev_gray_for_flow = None
-    events_z_rows = []  # buffer rows for events_zones.csv
+    events_z_rows = []
     snapshots = []
-    current_best = None  # best frame within an event
+    current_best = None
 
     prog = st.progress(0.0); status = st.empty()
     processed = 0; total_steps = (N // step + 1) if N > 0 else 0
@@ -745,7 +717,6 @@ def analyze_video(
         if frame is None:
             current_best = None
             return
-
         x0,y0,x1,y1 = current_best["x0"], current_best["y0"], current_best["x1"], current_best["y1"]
         cv2.rectangle(frame, (x0,y0), (x1,y1), (0,0,255), 3)
         label = (
@@ -754,13 +725,11 @@ def analyze_video(
         )
         cv2.putText(frame, label, (max(6,x0), max(24,y0-6)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2, cv2.LINE_AA)
-
         snap_path = os.path.join(out_dir, f"{base}_{stamp}_event{current_best['event_id']}_snapshot.jpg")
         ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
         if ok:
             tmp_path = snap_path + ".tmp"
-            with open(tmp_path, "wb") as fh:
-                fh.write(buf.tobytes())
+            with open(tmp_path, "wb") as fh: fh.write(buf.tobytes())
             os.replace(tmp_path, snap_path)
             snapshots.append({
                 "event_id": current_best["event_id"],
@@ -788,7 +757,9 @@ def analyze_video(
         ok, frame_bgr = cap.read()
         if not ok: break
         if f % step == 0:
+            # ensure uint8 contiguous grayscale for OpenCV
             gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+            gray = np.ascontiguousarray(gray, dtype=np.uint8)
 
             head_pts = detect_heads_gray(gray, detector)
             curr_count = len(head_pts)
@@ -810,7 +781,7 @@ def analyze_video(
             frames_rows.append((f, t, tc, curr_count, int(delta),
                                 p_cnn, y_cnn, y_heads, final_label))
 
-            # Event boundary bookkeeping
+            # event boundaries
             if final_label == 1 and not in_event:
                 in_event, start_f, start_t = True, f, t
                 event_id += 1
@@ -824,27 +795,30 @@ def analyze_video(
                     save_current_best()
                 in_event, start_f, start_t = False, None, None
 
-            # -------------------- XAI computations (positive frames) --------------------
+            # ---------- XAI computations (positive frames) ----------
             if XAI_ENABLED and final_label == 1:
-                # Grad-CAM (on 100x100 input) -> upscale to frame size
                 cam_small = gradcam_heatmap(model, x)
                 cam_up = upscale_cam(cam_small, W, H) if cam_small is not None else None
 
-                # Per-cell head counts & drop
                 counts_now = heads_per_cell(head_pts, GRID_ROWS, GRID_COLS, cell_w, cell_h)
                 delta_zone = prev_counts_zone - counts_now
                 prev_counts_zone = counts_now
 
-                # Optical flow (downward-only magnitude)
+                # Robust Farnebäck (downward-only)
                 if FLOW_ENABLED:
-                    if prev_gray_for_flow is None:
+                    # reset flow if shape mismatch or first use
+                    if prev_gray_for_flow is None or prev_gray_for_flow.shape != gray.shape:
                         down_mag = np.zeros((H, W), dtype=np.float32)
                     else:
-                        flow = cv2.calcOpticalFlowFarneback(prev_gray_for_flow, gray,
-                                                            pyr_scale=0.5, levels=3, winsize=15,
-                                                            iterations=3, poly_n=5, poly_sigma=1.2, flags=0)
-                        vy = flow[..., 1]
-                        down_mag = np.maximum(vy, 0.0).astype(np.float32)
+                        try:
+                            flow = cv2.calcOpticalFlowFarneback(
+                                prev_gray_for_flow, gray, None,
+                                0.5, 3, 15, 3, 5, 1.2, 0
+                            )
+                            vy = flow[..., 1]
+                            down_mag = np.maximum(vy, 0.0).astype(np.float32)
+                        except cv2.error:
+                            down_mag = np.zeros((H, W), dtype=np.float32)
                     prev_gray_for_flow = gray.copy()
                 else:
                     down_mag = np.zeros((H, W), dtype=np.float32)
@@ -852,7 +826,7 @@ def analyze_video(
                 max_heads_now = max(1.0, float(counts_now.max()))
                 mean_flow = float(down_mag.mean()) + 1e-6
 
-                # Score each cell
+                # score each cell
                 cell_records = []
                 for ((x0,y0,x1,y1), cell_id) in grid_boxes:
                     cnn_cell = float(cam_up[y0:y1, x0:x1].mean()) if cam_up is not None else 0.0
@@ -868,7 +842,6 @@ def analyze_video(
                         "cnn": cnn_cell, "drop": drop_cell, "flow": fmag_cell, "risk": float(risk)
                     })
 
-                # Gated candidate set: local drop or strong downward flow
                 cands = [i for i,c in enumerate(cell_records)
                          if (c["drop"] >= DROP_GATE) or ((c["flow"]/mean_flow) >= FLOW_GATE)]
                 if cands:
@@ -880,7 +853,6 @@ def analyze_video(
                 bx0,by0,bx1,by1 = best["x0"], best["y0"], best["x1"], best["y1"]
                 best_risk = best["risk"]
 
-                # Track best snapshot frame within event
                 if (current_best is None) or (best_risk > float(current_best["risk_score"])):
                     current_best = {
                         "event_id": event_id,
@@ -892,7 +864,6 @@ def analyze_video(
                         "risk_score": best_risk
                     }
 
-                # Buffer rows for events_zones.csv with components for XAI
                 for cell in cell_records:
                     events_z_rows.append({
                         "event_id": event_id, "frame": f, "timecode": tc, "zone_id": cell["cell_id"],
@@ -909,7 +880,6 @@ def analyze_video(
                 status.write(f"Processed {processed}/{total_steps} sampled frames…")
         f += 1
 
-    # close open event at EOF
     if in_event and start_f is not None:
         end_t = (f-1) / fps
         events_rows.append((start_f, f-1, start_t, end_t,
@@ -922,7 +892,6 @@ def analyze_video(
     df_frames = pd.DataFrame(frames_rows[1:], columns=frames_rows[0])
     df_events = pd.DataFrame(events_rows[1:], columns=events_rows[0])
 
-    # Build events_zones DataFrame for download (if any)
     df_events_zones = pd.DataFrame(events_z_rows) if events_z_rows else pd.DataFrame(
         columns=["event_id","frame","timecode","zone_id","x0","y0","x1","y1",
                  "risk_score","cnn_cell","drop_cell","flow_down_cell"]
@@ -944,12 +913,9 @@ if go:
         with st.spinner("Analyzing video…"):
             df_frames, df_events, labeled_path = analyze_video(tmp.name, model)
 
-        # Persist results so reruns keep the view
         st.session_state["video_results"] = {
             "df_frames": df_frames,
             "df_events": df_events,
             "labeled_path": labeled_path,
         }
-
-        # Render now
         render_results(df_frames, df_events, labeled_path)
