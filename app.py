@@ -9,6 +9,7 @@ import time
 import tempfile
 import subprocess
 import shutil
+import base64
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -358,7 +359,7 @@ def transcode_to_h264(src_path: str, dst_path: str, fps: float):
     ok = (proc.returncode == 0) and os.path.exists(dst_path) and os.path.getsize(dst_path) > 0
     return (dst_path if ok else src_path), ok, (proc.stderr or "")
 
-# =============== XAI: Robust Grad-CAM + zone grid helpers ====================
+# =============== XAI: Grad-CAM + zone grid helpers ===========================
 def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
     """Grad-CAM robust to Keras 3/TF2.20 model shapes and outputs."""
     import tensorflow as tf
@@ -370,25 +371,26 @@ def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
         if isinstance(t, (list, tuple)):
             t = t[0]
         t = tf.convert_to_tensor(t)
-        rank = t.shape.rank
-        if rank is None:
+        r = t.shape.rank
+        if r is None:
             t2 = tf.reshape(t, (tf.shape(t)[0], -1)); return t2[:, -1]
-        if rank == 1:
+        if r == 1:
             return t
-        if rank == 2:
+        if r == 2:
             c = t.shape[-1]
             return tf.squeeze(t, axis=-1) if c == 1 else t[:, -1]
         t2 = tf.reshape(t, (tf.shape(t)[0], -1))
         return t2[:, -1]
 
+    # pick last conv
     target_layer = None
-    if conv_layer_name is not None:
+    if conv_layer_name:
         try:
             L = model.get_layer(conv_layer_name)
             if len(L.output.shape) == 4:
                 target_layer = L
         except Exception:
-            target_layer = None
+            pass
     if target_layer is None:
         for L in reversed(model.layers):
             try:
@@ -400,23 +402,19 @@ def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
         return None
 
     try:
-        grad_model = __import__("tensorflow").keras.Model(
-            inputs=model.input, outputs=[target_layer.output, model.output]
-        )
+        grad_model = tf.keras.Model(inputs=model.input, outputs=[target_layer.output, model.output])
     except Exception:
-        grad_model = __import__("tensorflow").keras.Model(
-            inputs=model.inputs, outputs=[target_layer.output, model.outputs]
-        )
+        grad_model = tf.keras.Model(inputs=model.inputs, outputs=[target_layer.output, model.outputs])
 
-    with __import__("tensorflow").GradientTape() as tape:
+    with tf.GradientTape() as tape:
         conv_out, preds = grad_model(x_100x100x1, training=False)
         score_vec = _select_score_vector(preds)
 
     grads = tape.gradient(score_vec, conv_out)
     if grads is None:
         return None
-    weights = __import__("tensorflow").reduce_mean(grads, axis=(1, 2), keepdims=True)
-    cam = __import__("tensorflow").nn.relu(__import__("tensorflow").reduce_sum(weights * conv_out, axis=-1))
+    weights = tf.reduce_mean(grads, axis=(1, 2), keepdims=True)
+    cam = tf.nn.relu(tf.reduce_sum(weights * conv_out, axis=-1))
     cam = cam[0].numpy()
     cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
     return cam
@@ -445,26 +443,34 @@ def heads_per_cell(head_pts, rows, cols, cell_w, cell_h):
         counts[r, c] += 1
     return counts
 
-# ---- Robust image loader for Streamlit (avoid st.image TypeError) ----
-def _load_image_bytes_png(path: str):
-    """
-    Return PNG-encoded bytes for the image at `path` using OpenCV.
-    This bypasses PIL and avoids the 'channels' argument entirely.
-    """
+# ---- Snapshot display helper: tries st.image(np array), fallback to base64 <img> ----
+def _show_image_resilient(path: str, caption: str) -> bool:
     try:
-        # Read in a way that tolerates weird paths
         data = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
         if data is None:
             data = cv2.imread(path, cv2.IMREAD_COLOR)
         if data is None:
-            return None
-        # We can directly encode BGR -> PNG; no need to convert to RGB for PNG encoding
-        ok, buf = cv2.imencode(".png", data)
-        if not ok:
-            return None
-        return buf.tobytes()
+            return False
+        rgb = cv2.cvtColor(data, cv2.COLOR_BGR2RGB)
+        rgb = np.clip(rgb, 0, 255).astype(np.uint8)
+        try:
+            st.image(rgb, caption=caption, use_container_width=True)   # preferred path
+            return True
+        except Exception:
+            ok, buf = cv2.imencode(".png", data)
+            if not ok:
+                return False
+            b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+            st.markdown(
+                f'<figure style="margin:6px 0 18px 0">'
+                f'<img src="data:image/png;base64,{b64}" style="width:100%;border-radius:8px;">'
+                f'<figcaption style="text-align:center;opacity:.8">{caption}</figcaption>'
+                f'</figure>',
+                unsafe_allow_html=True
+            )
+            return True
     except Exception:
-        return None
+        return False
 
 # =============================================================================
 # Load model (silent) + status
@@ -618,13 +624,10 @@ def render_results(df_frames, df_events, labeled_path):
             caption = f"Event {s.get('event_id','?')} • frame {s.get('frame_index','?')} • {s.get('timecode','?')} • {s.get('zone_id','?')} (risk {risk:.2f})"
 
             if isinstance(path, str) and os.path.exists(path) and os.path.getsize(path) > 0:
-                img_bytes = _load_image_bytes_png(path)
                 col1, col2 = st.columns([2,1])
                 with col1:
-                    if isinstance(img_bytes, (bytes, bytearray)) and len(img_bytes) > 0:
-                        # No 'channels' arg — safest across Streamlit versions
-                        st.image(img_bytes, caption=caption, use_container_width=True)
-                    else:
+                    ok = _show_image_resilient(path, caption)
+                    if not ok:
                         st.warning(f"Snapshot could not be displayed (event {s.get('event_id','?')}).")
                 with col2:
                     with open(path, "rb") as fh:
