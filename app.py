@@ -53,7 +53,6 @@ FLOW_ENABLED  = False      # set True to include optical-flow magnitude in risk
 
 # ---------- Output behavior ----------
 SNAPSHOT_ONLY = True       # ✅ Save one red-marked frame per event; no full video
-SAVE_TOPK_ON_FRAME = 1     # draw only the single best zone (red) on the snapshot
 
 # ---------- Model location ----------
 APP_DIR = Path(__file__).resolve().parent
@@ -128,20 +127,6 @@ st.markdown(
       .sb-small {font-size:12px; opacity:.85;}
       .sb-card ul, .sb-card ol {padding-left: 1.05rem; margin: .25rem 0 0 0;}
       .sb-card li {margin-bottom: 6px;}
-
-      .capstone-badge {
-        display:inline-flex; align-items:center; gap:8px; margin-bottom:10px;
-        background: linear-gradient(90deg, rgba(239,68,68,.18), rgba(249,115,22,.18));
-        border:1px solid rgba(249,115,22,.35); color:#ffd7c2; padding:6px 10px; border-radius:999px; font-size:12px;
-      }
-      .capstone-grid { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-      .cap-card { border:1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.03);
-                  border-radius: 12px; padding: 10px 12px; }
-      .cap-title {font-weight:700; margin-bottom:6px;}
-      .cap-kv {font-size: 13px; line-height: 1.25rem;}
-      .cap-name {font-weight:600;}
-      .cap-id {opacity:.85;}
-      .divider {height:1px; background:rgba(255,255,255,.06); margin:10px 0;}
 
       .status-banner{
         display:flex; align-items:center; justify-content:center;
@@ -220,36 +205,15 @@ with st.sidebar:
     st.markdown(
         """
         <div class="sb-card">
-          <span class="capstone-badge">🎓 Capstone-C Project • East West University</span>
-          <div class="capstone-grid">
-            <div class="cap-card">
-              <div class="cap-title">Submitted By</div>
-              <div class="cap-kv">
-                <div><span class="cap-name">Tasfia Tahsin Annita</span> <span class="cap-id">• 2021-3-60-031</span></div>
-                <div><span class="cap-name">Md. Shakil Hossain</span> <span class="cap-id">• 2021-3-60-088</span></div>
-                <div><span class="cap-name">Kanij Fatema</span> <span class="cap-id">• 2021-3-60-095</span></div>
-                <div><span class="cap-name">Samura Rahman</span> <span class="cap-id">• 2021-3-60-064</span></div>
-              </div>
-            </div>
-            <div class="cap-card">
-              <div class="cap-title">Supervised By</div>
-              <div class="cap-kv">
-                <div class="cap-name">Dr. Anisur Rahman</div>
-                <div>Proctor</div>
-                <div>Associate Professor</div>
-                <div>Department of Computer Science and Engineering</div>
-                <div>East West University</div>
-              </div>
-            </div>
-          </div>
-          <div class="divider"></div>
-          <div class="sb-small">This application demonstrates ML-assisted analysis of crowd dynamics with visual evidence and interval summaries.</div>
+          <div class="sb-small">Capstone-C • East West University</div>
+          <div class="sb-small">Submitted by: Tasfia, Md. Shakil, Kanij, Samura</div>
+          <div class="sb-small">Supervisor: Dr. Anisur Rahman</div>
         </div>
         """,
         unsafe_allow_html=True
     )
     try:
-        import tensorflow as tf  # only for showing version; model loaded later
+        import tensorflow as tf
         tf_ver = tf.__version__
     except Exception:
         tf_ver = "not loaded"
@@ -257,17 +221,6 @@ with st.sidebar:
         f'<div class="sb-card sb-small">Environment: TF {tf_ver} • NumPy {np.__version__} • OpenCV {cv2.__version__}</div>',
         unsafe_allow_html=True,
     )
-
-# =============================================================================
-# Hero
-# =============================================================================
-st.markdown(
-    '<div class="cg-hero">'
-    '<div class="cg-title">Crowd Guardian</div>'
-    '<div class="cg-subtle">Machine learning based crowd dynamics analysis for effective stampede detection</div>'
-    '</div>',
-    unsafe_allow_html=True,
-)
 
 # =============================================================================
 # Helpers (ML + I/O)
@@ -294,7 +247,7 @@ def load_cnn(path_or_url: str):
     else:
         p = Path(path_or_url)
         local = str(p if p.is_absolute() else (APP_DIR / p))
-    return tf.keras.models.load_model(local, compile=False)  # Keras 3 safe
+    return tf.keras.models.load_model(local, compile=False)
 
 def sec_to_tc(sec: float) -> str:
     h = int(sec // 3600); m = int((sec % 3600) // 60); s = sec % 60
@@ -391,6 +344,7 @@ def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
         t2 = tf.reshape(t, (tf.shape(t)[0], -1))
         return t2[:, -1]
 
+    # choose conv layer
     target_layer = None
     if conv_layer_name is not None:
         try:
@@ -412,13 +366,12 @@ def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
         return None
 
     try:
-        grad_model = __import__("tensorflow").keras.Model(
-            inputs=model.input, outputs=[target_layer.output, model.output]
-        )
+        import tensorflow as tf
+        grad_model = tf.keras.Model(inputs=model.input,
+                                    outputs=[target_layer.output, model.output])
     except Exception:
-        grad_model = __import__("tensorflow").keras.Model(
-            inputs=model.inputs, outputs=[target_layer.output, model.outputs]
-        )
+        grad_model = tf.keras.Model(inputs=model.inputs,
+                                    outputs=[target_layer.output, model.outputs])
 
     import tensorflow as tf
     with tf.GradientTape() as tape:
@@ -458,14 +411,6 @@ def heads_per_cell(head_pts, rows, cols, cell_w, cell_h):
         counts[r, c] += 1
     return counts
 
-def draw_top_cells(vis_bgr, grid_boxes, scores, K=3):
-    idx = np.argsort(scores)[::-1][:K]
-    for i in idx:
-        (x0, y0, x1, y1), cell_id = grid_boxes[i]
-        cv2.rectangle(vis_bgr, (x0, y0), (x1, y1), (0, 0, 255), 2)
-        cv2.putText(vis_bgr, f"{cell_id}:{scores[i]:.2f}", (x0+6, y0+18),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1, cv2.LINE_AA)
-
 # =============================================================================
 # Load model (silent) + status
 # =============================================================================
@@ -484,8 +429,17 @@ if load_err:
     st.caption(load_err)
 
 # =============================================================================
-# Re-render persisted results to avoid refresh loss
+# Render results (robust snapshots)
 # =============================================================================
+def _safe_float(x, default=0.0):
+    try:
+        # handle numpy scalar / strings
+        if isinstance(x, (list, tuple, np.ndarray)):
+            x = np.asarray(x).flatten()[0]
+        return float(x)
+    except Exception:
+        return default
+
 def render_results(df_frames, df_events, labeled_path):
     st.markdown('<h2 class="cg-h2">Results</h2>', unsafe_allow_html=True)
 
@@ -497,42 +451,6 @@ def render_results(df_frames, df_events, labeled_path):
     c1.metric("Events", total_events)
     c2.metric("Total Duration (s)", f"{total_dur:.2f}")
     c3.metric("Longest Event (s)", f"{longest:.2f}")
-
-    # Confetti if detected
-    if total_events > 0:
-        components.html("""
-        <canvas id="c"></canvas>
-        <style>
-          #c{position:relative;width:100%;height:140px;display:block;border-radius:12px;margin:6px 0 4px 0;
-             background:linear-gradient(90deg, rgba(16,185,129,.18), rgba(239,68,68,.18));}
-        </style>
-        <script>
-          const canvas = document.getElementById('c');
-          const ctx = canvas.getContext('2d');
-          function resize(){canvas.width=canvas.clientWidth; canvas.height=140;}
-          window.addEventListener('resize', resize); resize();
-          const confetti = [];
-          function spawn(){for(let i=0;i<50;i++){confetti.push({
-            x: Math.random()*canvas.width, y: -10 - Math.random()*30,
-            vx: (Math.random()-0.5)*1.5, vy: 1+Math.random()*2.5,
-            s: 2+Math.random()*3, a: Math.random()*Math.PI
-          });}}
-          spawn();
-          function tick(){
-            ctx.clearRect(0,0,canvas.width,canvas.height);
-            confetti.forEach(p=>{
-              p.x+=p.vx; p.y+=p.vy; p.a+=0.1;
-              ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.a);
-              ctx.fillStyle = ['#ef4444','#f97316','#10b981','#60a5fa'][Math.floor(Math.random()*4)];
-              ctx.fillRect(-p.s/2, -p.s/2, p.s, p.s*2);
-              ctx.restore();
-            });
-            requestAnimationFrame(tick);
-          }
-          tick();
-          setTimeout(()=>{spawn()}, 600);
-        </script>
-        """, height=160)
 
     # Status banner
     st.markdown('<div class="cg-card">', unsafe_allow_html=True)
@@ -569,8 +487,8 @@ def render_results(df_frames, df_events, labeled_path):
             st.altair_chart(line_head.interactive(), use_container_width=True)
 
     # Tables + downloads
+    st.subheader("Detected intervals")
     if not df_events.empty:
-        st.subheader("Detected intervals")
         st.dataframe(df_events, use_container_width=True)
     else:
         st.info("No stampede intervals found.")
@@ -578,9 +496,8 @@ def render_results(df_frames, df_events, labeled_path):
     st.subheader("Per-frame predictions")
     st.dataframe(df_frames.head(1000), use_container_width=True)
 
-    # Downloads (events/frame preds always)
-    uid = os.path.splitext(os.path.basename(labeled_path or "na.mp4"))[0] if labeled_path else "na"
-
+    # Downloads
+    uid = "na"
     c1, c2, c3 = st.columns(3)
     with c1:
         st.download_button("⬇️ events.csv", df_events.to_csv(index=False).encode("utf-8"),
@@ -591,13 +508,7 @@ def render_results(df_frames, df_events, labeled_path):
                            file_name="frame_preds.csv", mime="text/csv",
                            use_container_width=True, key=f"dl_frames_{uid}")
     with c3:
-        # Video download disabled in snapshot mode; show button if available
-        if labeled_path and os.path.exists(labeled_path) and os.path.getsize(labeled_path) > 0:
-            with open(labeled_path, "rb") as fh:
-                st.download_button("⬇️ labeled.mp4", fh.read(), file_name=os.path.basename(labeled_path),
-                                   mime="video/mp4", use_container_width=True, key=f"dl_video_{uid}")
-        else:
-            st.button("Video disabled (snapshot mode)", disabled=True, use_container_width=True, key=f"dl_na_{uid}")
+        st.button("Video disabled (snapshot mode)", disabled=True, use_container_width=True, key=f"dl_na_{uid}")
 
     # Extra: events_zones.csv if XAI ran
     extra = st.session_state.get("video_xai", {})
@@ -608,23 +519,36 @@ def render_results(df_frames, df_events, labeled_path):
                            file_name="events_zones.csv", mime="text/csv",
                            use_container_width=True, key=f"dl_events_z_{uid}")
 
-    # New: snapshots listing + CSV
+    # New: snapshots listing + CSV (robust)
     snapshots = extra.get("snapshots", [])
     if snapshots:
         st.markdown('<h2 class="cg-h2">Event Snapshots (red-marked zone)</h2>', unsafe_allow_html=True)
         snap_rows = []
         for s in snapshots:
-            col1, col2 = st.columns([2,1])
-            with col1:
-                st.image(s["path"], caption=f"Event {s['event_id']} • {s['timecode']} • {s['zone_id']} (risk {s['risk_score']:.2f})", use_container_width=True)
-            with col2:
-                with open(s["path"], "rb") as fh:
-                    st.download_button("⬇️ Download snapshot", fh.read(),
-                        file_name=os.path.basename(s["path"]), mime="image/jpeg", use_container_width=True)
+            path = s.get("path")
+            risk = _safe_float(s.get("risk_score", 0.0), 0.0)
+            caption = f"Event {s.get('event_id','?')} • frame {s.get('frame_index','?')} • {s.get('timecode','?')} • {s.get('zone_id','?')} (risk {risk:.2f})"
+
+            if isinstance(path, str) and os.path.exists(path) and os.path.getsize(path) > 0:
+                col1, col2 = st.columns([2,1])
+                with col1:
+                    st.image(path, caption=caption, use_container_width=True)
+                with col2:
+                    with open(path, "rb") as fh:
+                        st.download_button("⬇️ Download snapshot", fh.read(),
+                                           file_name=os.path.basename(path),
+                                           mime="image/jpeg", use_container_width=True)
+            else:
+                st.warning(f"Snapshot file missing for event {s.get('event_id','?')} (path: {path})")
+
             snap_rows.append({
-                "event_id": s["event_id"], "frame": s["frame"], "timecode": s["timecode"],
-                "zone_id": s["zone_id"], "x0": s["x0"], "y0": s["y0"], "x1": s["x1"], "y1": s["y1"],
-                "risk_score": s["risk_score"], "path": s["path"]
+                "event_id": s.get("event_id"),
+                "frame_index": s.get("frame_index"),
+                "timecode": s.get("timecode"),
+                "zone_id": s.get("zone_id"),
+                "x0": s.get("x0"), "y0": s.get("y0"), "x1": s.get("x1"), "y1": s.get("y1"),
+                "risk_score": risk,
+                "path": path,
             })
         df_snaps = pd.DataFrame(snap_rows)
         st.download_button("⬇️ event_snapshots.csv",
@@ -632,12 +556,7 @@ def render_results(df_frames, df_events, labeled_path):
                            file_name="event_snapshots.csv", mime="text/csv",
                            use_container_width=True)
 
-    # In snapshot mode we skip video preview
-    if not SNAPSHOT_ONLY:
-        st.markdown('<h2 class="cg-h2">Labeled Video Preview</h2>', unsafe_allow_html=True)
-        if labeled_path and os.path.exists(labeled_path): st.video(labeled_path)
-
-# ---- Re-render results from session on EVERY run
+# ---- Re-render results from session to prevent ‘refresh’ loss
 if "video_results" in st.session_state:
     _res = st.session_state["video_results"]
     render_results(_res["df_frames"], _res["df_events"], _res.get("labeled_path"))
@@ -696,11 +615,7 @@ def analyze_video(
     mp4_path = os.path.join(out_dir, f"{base}_{stamp}_labeled.mp4")
 
     # Video writer (disabled in snapshot mode)
-    if SNAPSHOT_ONLY:
-        out = None
-    else:
-        fourcc = cv2.VideoWriter_fourcc(*"MJPG")
-        out = cv2.VideoWriter(raw_path, fourcc, fps if fps and fps > 0 else 25.0, (W, H))
+    out = None  # snapshot only
 
     prev_pts, prev_count = [], None
     in_event, start_f, start_t = False, None, None
@@ -720,17 +635,29 @@ def analyze_video(
 
     def save_current_best():
         nonlocal current_best, snapshots
-        if not current_best: return
-        # draw a red rectangle on the stored frame
-        frame = current_best["frame"].copy()
+        if not current_best:
+            return
+        # draw and save
+        frame = current_best.pop("frame", None)
+        if frame is None:
+            current_best = None
+            return
         x0,y0,x1,y1 = current_best["x0"],current_best["y0"],current_best["x1"],current_best["y1"]
         cv2.rectangle(frame, (x0,y0), (x1,y1), (0,0,255), 3)
-        label = f"Event {current_best['event_id']} • {current_best['timecode']} • {current_best['zone_id']} • risk {current_best['risk_score']:.2f}"
+        label = f"Event {current_best['event_id']} • {current_best['timecode']} • {current_best['zone_id']} • risk {float(current_best['risk_score']):.2f}"
         cv2.putText(frame, label, (max(6,x0), max(24,y0-6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2, cv2.LINE_AA)
         snap_path = os.path.join(out_dir, f"{base}_{stamp}_event{current_best['event_id']}_snapshot.jpg")
         cv2.imwrite(snap_path, frame)
-        current_best["path"] = snap_path
-        snapshots.append({k: current_best[k] for k in ["event_id","frame","timecode","zone_id","x0","y0","x1","y1","risk_score","path"]})
+        # store only lightweight metadata in session_state
+        snapshots.append({
+            "event_id": current_best["event_id"],
+            "frame_index": current_best["frame_index"],
+            "timecode": current_best["timecode"],
+            "zone_id": current_best["zone_id"],
+            "x0": x0, "y0": y0, "x1": x1, "y1": y1,
+            "risk_score": float(current_best["risk_score"]),
+            "path": snap_path
+        })
         current_best = None
 
     f = 0
@@ -752,6 +679,7 @@ def analyze_video(
                 y_heads = 1 if (delta >= abs_drop or r >= rel_drop) else 0
 
             x = preprocess_for_cnn(gray)
+            # NOTE: model expects grayscale (100x100x1)
             p_cnn = float(model.predict(x, verbose=0)[0][0])
             y_cnn = 1 if p_cnn >= cnn_threshold else 0
             final_label = combine_labels(y_heads, y_cnn, combine_rule)
@@ -760,26 +688,21 @@ def analyze_video(
             frames_rows.append((f, t, tc, curr_count, int(delta),
                                 p_cnn, y_cnn, y_heads, final_label))
 
-            # Event state transitions
+            # Event transitions
             if final_label == 1 and not in_event:
                 in_event, start_f, start_t = True, f, t
                 event_id += 1
-                current_best = None  # reset tracker
+                current_best = None
             elif final_label == 0 and in_event:
-                # close event if long enough
                 dur_frames = (f - start_f) // step
                 if dur_frames >= min_event_frames:
                     end_t = (f-1) / fps
                     events_rows.append((start_f, f-1, start_t, end_t,
                                         sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
-                    # save the best snapshot for this event
                     save_current_best()
                 in_event, start_f, start_t = False, None, None
 
-            # -------------------- XAI computations (positive frames) --------------------
-            cam_up = None
-            zone_scores = None
-            scores_flat = []
+            # XAI computations for positive frames
             if XAI_ENABLED and final_label == 1:
                 cam_small = gradcam_heatmap(model, x)
                 cam_up = upscale_cam(cam_small, W, H) if cam_small is not None else None
@@ -803,6 +726,7 @@ def analyze_video(
                 mean_flow = float(flow_mag.mean()) if FLOW_ENABLED else 1.0
 
                 zone_scores = []
+                events_zone_rows_local = []
                 for ((x0,y0,x1,y1), cell_id) in grid_boxes:
                     cnn_cell = float(cam_up[y0:y1, x0:x1].mean()) if cam_up is not None else 0.0
                     r_idx = min(GRID_ROWS-1, max(0, y0 // max(1, cell_h)))
@@ -813,53 +737,28 @@ def analyze_video(
                             + W_DROP * (drop_cell / max_heads_now)
                             + W_FLOW * (fmag_cell / (mean_flow + 1e-6)))
                     zone_scores.append(risk)
-                    scores_flat.append((cell_id, x0, y0, x1, y1, risk))
+                    events_zone_rows_local.append({
+                        "event_id": event_id, "frame": f, "timecode": tc, "zone_id": cell_id,
+                        "x0": x0, "y0": y0, "x1": x1, "y1": y1, "risk_score": float(risk)
+                    })
+                # store detailed rows
+                events_z_rows.extend(events_zone_rows_local)
 
-                # Track BEST snapshot frame for the event
+                # Track BEST snapshot
                 if zone_scores:
                     best_i = int(np.argmax(zone_scores))
                     (bx0,by0,bx1,by1), bcell = grid_boxes[best_i]
                     best_risk = float(zone_scores[best_i])
-                    if (current_best is None) or (best_risk > current_best["risk_score"]):
+                    if (current_best is None) or (best_risk > float(current_best["risk_score"])):
                         current_best = {
-                            "event_id": event_id, "frame": frame_bgr.copy(), "timecode": tc,
-                            "zone_id": bcell, "x0": bx0, "y0": by0, "x1": bx1, "y1": by1,
-                            "risk_score": best_risk, "frame_index": f
+                            "event_id": event_id,
+                            "frame": frame_bgr.copy(),
+                            "frame_index": f,
+                            "timecode": tc,
+                            "zone_id": bcell,
+                            "x0": bx0, "y0": by0, "x1": bx1, "y1": by1,
+                            "risk_score": best_risk
                         }
-
-                # Buffer rows for events_zones.csv (optional analysis)
-                for (cell_id, x0, y0, x1, y1, risk) in scores_flat:
-                    events_z_rows.append({
-                        "event_id": event_id, "frame": f, "timecode": tc, "zone_id": cell_id,
-                        "x0": x0, "y0": y0, "x1": x1, "y1": y1, "risk_score": risk
-                    })
-            # ---------------------------------------------------------------------------
-
-            # Optional overlay video (disabled in snapshot mode)
-            if not SNAPSHOT_ONLY:
-                vis = frame_bgr.copy()
-                for (cx, cy) in head_pts:
-                    cv2.circle(vis, (int(cx), int(cy)), 4, (255,255,0), -1)
-                if draw_links:
-                    for (i_prev, j_curr) in matches:
-                        x1, y1 = prev_pts[i_prev]; x2, y2 = head_pts[j_curr]
-                        cv2.line(vis, (int(x1), int(y1)), (int(x2), int(y2)), (255, 0, 0), 2)
-                if XAI_ENABLED and zone_scores is not None and final_label == 1:
-                    # thin grid
-                    for (x0,y0,x1,y1), _ in grid_boxes:
-                        cv2.rectangle(vis, (x0,y0), (x1,y1), (255,255,255), 1)
-                    # top-K (but keep K=1 for video to be subtle)
-                    draw_top_cells(vis, grid_boxes, np.array(zone_scores), K=min(1, TOPK_CELLS))
-                banner_h = max(40, H//14)
-                color = (0,0,255) if final_label==1 else (0,180,0)
-                cv2.rectangle(vis, (0,0), (W, banner_h), color, -1)
-                cv2.putText(
-                    vis,
-                    f"heads={curr_count}  Δ={delta:+d}  p_cnn={p_cnn:.2f} (τ={cnn_threshold:.2f})  "
-                    f"rule={combine_rule}  label={'Stampede' if final_label==1 else 'No Stampede'}  t={tc}",
-                    (12, banner_h-12), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255,255,255), 2, cv2.LINE_AA
-                )
-                if out and out.isOpened(): out.write(vis)
 
             prev_pts, prev_count = head_pts, curr_count
 
@@ -877,30 +776,20 @@ def analyze_video(
         save_current_best()
 
     cap.release()
-    if not SNAPSHOT_ONLY and out and out.isOpened(): out.release()
-
-    # H.264 transcode only if we actually wrote a video
-    if not SNAPSHOT_ONLY and os.path.exists(raw_path) and os.path.getsize(raw_path) > 0:
-        playable_path, ok, _ = transcode_to_h264(raw_path, mp4_path, fps)
-        if not ok: st.warning("Transcode failed; preview may not play.")
-    else:
-        playable_path = ""  # snapshot mode
 
     prog.progress(1.0); status.write("Done.")
 
     df_frames = pd.DataFrame(frames_rows[1:], columns=frames_rows[0])
     df_events = pd.DataFrame(events_rows[1:], columns=events_rows[0])
-    # events_zones.csv (optional analytics)
-    if events_z_rows:
-        df_events_zones = pd.DataFrame(events_z_rows)
-    else:
-        df_events_zones = pd.DataFrame(columns=["event_id","frame","timecode","zone_id","x0","y0","x1","y1","risk_score"])
+    df_events_zones = (pd.DataFrame(events_z_rows)
+                       if events_z_rows else
+                       pd.DataFrame(columns=["event_id","frame","timecode","zone_id","x0","y0","x1","y1","risk_score"]))
 
     st.session_state["video_xai"] = {
         "events_zones": df_events_zones,
         "snapshots": snapshots
     }
-    return df_frames, df_events, playable_path
+    return df_frames, df_events, ""  # snapshot mode => no video path
 
 # =============================================================================
 # Run
