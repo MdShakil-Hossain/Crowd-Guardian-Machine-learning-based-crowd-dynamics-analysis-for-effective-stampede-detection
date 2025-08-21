@@ -1,4 +1,5 @@
 # app.py — Crowd Guardian (Video only) + XAI overlays (Grad-CAM + Zone risk)
+# Snapshot mode: save ONE red-marked frame per event (no full overlay video)
 # Premium UI: custom HTML/CSS, decorated sidebar, status banner (no timeline bar),
 # Altair charts, JS confetti, animated particles background, and
 # **session_state persistence** so downloads don't "refresh away" your results.
@@ -42,13 +43,17 @@ MIN_INER      = 0.10
 DRAW_LINKS    = True
 TARGET_FPS    = None  # None = use every frame
 
-# ---------- XAI defaults (no UI knobs; minimal UI change) ----------
+# ---------- XAI defaults ----------
 XAI_ENABLED   = True       # master switch for explainability overlays
 GRID_ROWS     = 4
 GRID_COLS     = 4
 W_CAM, W_DROP, W_FLOW = 0.5, 0.4, 0.1   # zone fusion weights
 TOPK_CELLS    = 3
 FLOW_ENABLED  = False      # set True to include optical-flow magnitude in risk
+
+# ---------- Output behavior ----------
+SNAPSHOT_ONLY = True       # ✅ Save one red-marked frame per event; no full video
+SAVE_TOPK_ON_FRAME = 1     # draw only the single best zone (red) on the snapshot
 
 # ---------- Model location ----------
 APP_DIR = Path(__file__).resolve().parent
@@ -362,86 +367,71 @@ def transcode_to_h264(src_path: str, dst_path: str, fps: float):
 def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
     """
     Robust Grad-CAM for Keras 3 / TF 2.20:
-    - Handles model outputs that are tensor/list/tuple/dict and 1D/2D shapes.
-    - If conv_layer_name is given and valid (rank-4 output), uses it.
-    - Else, auto-picks the last layer with a rank-4 (H,W,C) output.
-    Returns a CAM array in [0,1] or None if unavailable.
+    - Handles tensor/list/tuple/dict outputs and 1D/2D shapes.
+    - If conv_layer_name is valid (rank-4), uses it; else auto-picks last rank-4 layer.
+    Returns CAM in [0,1] or None.
     """
     import tensorflow as tf
 
-    # Helper to pick / normalize the score tensor (batch vector)
     def _select_score_vector(preds_any):
         t = preds_any
         if isinstance(t, dict):
-            # take first value deterministically
             t = t[sorted(t.keys())[0]]
         if isinstance(t, (list, tuple)):
             t = t[0]
         t = tf.convert_to_tensor(t)
         rank = t.shape.rank
         if rank is None:
-            # fallback: flatten
-            t2 = tf.reshape(t, (tf.shape(t)[0], -1))
-            return t2[:, -1]
+            t2 = tf.reshape(t, (tf.shape(t)[0], -1)); return t2[:, -1]
         if rank == 1:
-            return t  # (B,)
+            return t
         if rank == 2:
-            # (B, C). If C==1, squeeze; else use last channel as "positive" class.
             c = t.shape[-1]
-            if c == 1:
-                return tf.squeeze(t, axis=-1)  # (B,)
-            else:
-                return t[:, -1]  # (B,)
-        # higher ranks: flatten to (B, -1) and take last column
+            return tf.squeeze(t, axis=-1) if c == 1 else t[:, -1]
         t2 = tf.reshape(t, (tf.shape(t)[0], -1))
         return t2[:, -1]
 
-    # Choose target conv layer
     target_layer = None
     if conv_layer_name is not None:
         try:
             L = model.get_layer(conv_layer_name)
-            _ = L.output  # may raise if layer isn't connected
+            _ = L.output
             if len(_.shape) == 4:
                 target_layer = L
         except Exception:
             target_layer = None
-
     if target_layer is None:
-        # auto-pick last layer with 4D output
         for L in reversed(model.layers):
             try:
                 out = L.output
                 if hasattr(out, "shape") and len(out.shape) == 4:
-                    target_layer = L
-                    break
+                    target_layer = L; break
             except Exception:
                 continue
-
     if target_layer is None:
-        return None  # no usable feature map
+        return None
 
-    # Build gradient model safely
     try:
-        grad_model = tf.keras.Model(inputs=model.input,
-                                    outputs=[target_layer.output, model.output])
+        grad_model = __import__("tensorflow").keras.Model(
+            inputs=model.input, outputs=[target_layer.output, model.output]
+        )
     except Exception:
-        grad_model = tf.keras.Model(inputs=model.inputs,
-                                    outputs=[target_layer.output, model.outputs])
+        grad_model = __import__("tensorflow").keras.Model(
+            inputs=model.inputs, outputs=[target_layer.output, model.outputs]
+        )
 
+    import tensorflow as tf
     with tf.GradientTape() as tape:
         conv_out, preds = grad_model(x_100x100x1, training=False)
-        score_vec = _select_score_vector(preds)  # (B,)
+        score_vec = _select_score_vector(preds)
 
     grads = tape.gradient(score_vec, conv_out)
     if grads is None:
         return None
-
-    weights = tf.reduce_mean(grads, axis=(1, 2), keepdims=True)   # (B,1,1,C)
-    cam = tf.nn.relu(tf.reduce_sum(weights * conv_out, axis=-1))  # (B,h,w)
+    weights = tf.reduce_mean(grads, axis=(1, 2), keepdims=True)
+    cam = tf.nn.relu(tf.reduce_sum(weights * conv_out, axis=-1))
     cam = cam[0].numpy()
-    denom = (cam.max() - cam.min())
-    cam = (cam - cam.min()) / (denom + 1e-8)
+    cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
     return cam
 
 def upscale_cam(cam_small, W, H):
@@ -474,7 +464,7 @@ def draw_top_cells(vis_bgr, grid_boxes, scores, K=3):
         (x0, y0, x1, y1), cell_id = grid_boxes[i]
         cv2.rectangle(vis_bgr, (x0, y0), (x1, y1), (0, 0, 255), 2)
         cv2.putText(vis_bgr, f"{cell_id}:{scores[i]:.2f}", (x0+6, y0+18),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1, cv2.LINE_AA)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1, cv2.LINE_AA)
 
 # =============================================================================
 # Load model (silent) + status
@@ -494,7 +484,7 @@ if load_err:
     st.caption(load_err)
 
 # =============================================================================
-# (NEW) Re-render persisted results so downloads don't clear the page
+# Re-render persisted results to avoid refresh loss
 # =============================================================================
 def render_results(df_frames, df_events, labeled_path):
     st.markdown('<h2 class="cg-h2">Results</h2>', unsafe_allow_html=True)
@@ -544,7 +534,7 @@ def render_results(df_frames, df_events, labeled_path):
         </script>
         """, height=160)
 
-    # Status banner (only)
+    # Status banner
     st.markdown('<div class="cg-card">', unsafe_allow_html=True)
     status_cls = "status-ok" if total_events > 0 else "status-safe"
     status_text = "Stampede detected" if total_events > 0 else "No stampede detected"
@@ -588,8 +578,8 @@ def render_results(df_frames, df_events, labeled_path):
     st.subheader("Per-frame predictions")
     st.dataframe(df_frames.head(1000), use_container_width=True)
 
-    # Stable keys so reruns don't duplicate widgets
-    uid = os.path.splitext(os.path.basename(labeled_path))[0] if labeled_path else "na"
+    # Downloads (events/frame preds always)
+    uid = os.path.splitext(os.path.basename(labeled_path or "na.mp4"))[0] if labeled_path else "na"
 
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -601,14 +591,15 @@ def render_results(df_frames, df_events, labeled_path):
                            file_name="frame_preds.csv", mime="text/csv",
                            use_container_width=True, key=f"dl_frames_{uid}")
     with c3:
-        if os.path.exists(labeled_path) and os.path.getsize(labeled_path) > 0:
+        # Video download disabled in snapshot mode; show button if available
+        if labeled_path and os.path.exists(labeled_path) and os.path.getsize(labeled_path) > 0:
             with open(labeled_path, "rb") as fh:
                 st.download_button("⬇️ labeled.mp4", fh.read(), file_name=os.path.basename(labeled_path),
                                    mime="video/mp4", use_container_width=True, key=f"dl_video_{uid}")
         else:
-            st.button("Video unavailable", disabled=True, use_container_width=True, key=f"dl_na_{uid}")
+            st.button("Video disabled (snapshot mode)", disabled=True, use_container_width=True, key=f"dl_na_{uid}")
 
-    # Extra download: events_zones.csv if XAI ran
+    # Extra: events_zones.csv if XAI ran
     extra = st.session_state.get("video_xai", {})
     df_events_zones = extra.get("events_zones")
     if isinstance(df_events_zones, pd.DataFrame) and not df_events_zones.empty:
@@ -617,14 +608,39 @@ def render_results(df_frames, df_events, labeled_path):
                            file_name="events_zones.csv", mime="text/csv",
                            use_container_width=True, key=f"dl_events_z_{uid}")
 
-    st.markdown('<h2 class="cg-h2">Labeled Video Preview</h2>', unsafe_allow_html=True)
-    if os.path.exists(labeled_path): st.video(labeled_path)
-    else: st.info("Preview unavailable.")
+    # New: snapshots listing + CSV
+    snapshots = extra.get("snapshots", [])
+    if snapshots:
+        st.markdown('<h2 class="cg-h2">Event Snapshots (red-marked zone)</h2>', unsafe_allow_html=True)
+        snap_rows = []
+        for s in snapshots:
+            col1, col2 = st.columns([2,1])
+            with col1:
+                st.image(s["path"], caption=f"Event {s['event_id']} • {s['timecode']} • {s['zone_id']} (risk {s['risk_score']:.2f})", use_container_width=True)
+            with col2:
+                with open(s["path"], "rb") as fh:
+                    st.download_button("⬇️ Download snapshot", fh.read(),
+                        file_name=os.path.basename(s["path"]), mime="image/jpeg", use_container_width=True)
+            snap_rows.append({
+                "event_id": s["event_id"], "frame": s["frame"], "timecode": s["timecode"],
+                "zone_id": s["zone_id"], "x0": s["x0"], "y0": s["y0"], "x1": s["x1"], "y1": s["y1"],
+                "risk_score": s["risk_score"], "path": s["path"]
+            })
+        df_snaps = pd.DataFrame(snap_rows)
+        st.download_button("⬇️ event_snapshots.csv",
+                           df_snaps.to_csv(index=False).encode("utf-8"),
+                           file_name="event_snapshots.csv", mime="text/csv",
+                           use_container_width=True)
 
-# ---- Re-render results from session on EVERY run (prevents ‘refresh’ loss)
+    # In snapshot mode we skip video preview
+    if not SNAPSHOT_ONLY:
+        st.markdown('<h2 class="cg-h2">Labeled Video Preview</h2>', unsafe_allow_html=True)
+        if labeled_path and os.path.exists(labeled_path): st.video(labeled_path)
+
+# ---- Re-render results from session on EVERY run
 if "video_results" in st.session_state:
     _res = st.session_state["video_results"]
-    render_results(_res["df_frames"], _res["df_events"], _res["labeled_path"])
+    render_results(_res["df_frames"], _res["df_events"], _res.get("labeled_path"))
 
 # =============================================================================
 # Upload
@@ -679,22 +695,43 @@ def analyze_video(
     raw_path = os.path.join(out_dir, f"{base}_{stamp}_raw.avi")
     mp4_path = os.path.join(out_dir, f"{base}_{stamp}_labeled.mp4")
 
-    fourcc = cv2.VideoWriter_fourcc(*"MJPG")
-    out = cv2.VideoWriter(raw_path, fourcc, fps if fps and fps > 0 else 25.0, (W, H))
+    # Video writer (disabled in snapshot mode)
+    if SNAPSHOT_ONLY:
+        out = None
+    else:
+        fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+        out = cv2.VideoWriter(raw_path, fourcc, fps if fps and fps > 0 else 25.0, (W, H))
 
     prev_pts, prev_count = [], None
     in_event, start_f, start_t = False, None, None
     min_event_frames = max(1, int(round(min_event_sec * (fps/step))))
-    event_id = 0  # XAI: running event index
+    event_id = 0
 
     # XAI state
     grid_boxes, cell_w, cell_h = make_grid(W, H, rows=GRID_ROWS, cols=GRID_COLS)
     prev_counts_zone = np.zeros((GRID_ROWS, GRID_COLS), dtype=int)
     prev_gray_for_flow = None
-    events_z_rows = []  # buffer rows for events_zones.csv
+    events_z_rows = []
+    snapshots = []
+    current_best = None  # best snapshot candidate of current event
 
     prog = st.progress(0.0); status = st.empty()
     processed = 0; total_steps = (N // step + 1) if N > 0 else 0
+
+    def save_current_best():
+        nonlocal current_best, snapshots
+        if not current_best: return
+        # draw a red rectangle on the stored frame
+        frame = current_best["frame"].copy()
+        x0,y0,x1,y1 = current_best["x0"],current_best["y0"],current_best["x1"],current_best["y1"]
+        cv2.rectangle(frame, (x0,y0), (x1,y1), (0,0,255), 3)
+        label = f"Event {current_best['event_id']} • {current_best['timecode']} • {current_best['zone_id']} • risk {current_best['risk_score']:.2f}"
+        cv2.putText(frame, label, (max(6,x0), max(24,y0-6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2, cv2.LINE_AA)
+        snap_path = os.path.join(out_dir, f"{base}_{stamp}_event{current_best['event_id']}_snapshot.jpg")
+        cv2.imwrite(snap_path, frame)
+        current_best["path"] = snap_path
+        snapshots.append({k: current_best[k] for k in ["event_id","frame","timecode","zone_id","x0","y0","x1","y1","risk_score","path"]})
+        current_best = None
 
     f = 0
     while True:
@@ -715,7 +752,6 @@ def analyze_video(
                 y_heads = 1 if (delta >= abs_drop or r >= rel_drop) else 0
 
             x = preprocess_for_cnn(gray)
-            # NOTE: model expects grayscale (100x100x1)
             p_cnn = float(model.predict(x, verbose=0)[0][0])
             y_cnn = 1 if p_cnn >= cnn_threshold else 0
             final_label = combine_labels(y_heads, y_cnn, combine_rule)
@@ -724,33 +760,33 @@ def analyze_video(
             frames_rows.append((f, t, tc, curr_count, int(delta),
                                 p_cnn, y_cnn, y_heads, final_label))
 
-            # Event boundary bookkeeping
+            # Event state transitions
             if final_label == 1 and not in_event:
                 in_event, start_f, start_t = True, f, t
                 event_id += 1
+                current_best = None  # reset tracker
             elif final_label == 0 and in_event:
+                # close event if long enough
                 dur_frames = (f - start_f) // step
                 if dur_frames >= min_event_frames:
                     end_t = (f-1) / fps
                     events_rows.append((start_f, f-1, start_t, end_t,
                                         sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
+                    # save the best snapshot for this event
+                    save_current_best()
                 in_event, start_f, start_t = False, None, None
 
-            # -------------------- XAI computations (before drawing) --------------------
+            # -------------------- XAI computations (positive frames) --------------------
             cam_up = None
             zone_scores = None
             scores_flat = []
             if XAI_ENABLED and final_label == 1:
-                # 1) Robust Grad-CAM (graceful if unavailable)
                 cam_small = gradcam_heatmap(model, x)
                 cam_up = upscale_cam(cam_small, W, H) if cam_small is not None else None
-
-                # 2) Per-cell head counts and deltas
                 counts_now = heads_per_cell(head_pts, GRID_ROWS, GRID_COLS, cell_w, cell_h)
                 delta_zone = prev_counts_zone - counts_now
                 prev_counts_zone = counts_now
 
-                # 3) Optional flow magnitude
                 if FLOW_ENABLED:
                     if prev_gray_for_flow is None:
                         flow_mag = np.zeros((H, W), dtype=np.float32)
@@ -763,73 +799,68 @@ def analyze_video(
                 else:
                     flow_mag = np.zeros((H, W), dtype=np.float32)
 
-                # Safe normalizers
                 max_heads_now = max(1.0, float(counts_now.max()))
                 mean_flow = float(flow_mag.mean()) if FLOW_ENABLED else 1.0
 
-                # 4) Aggregate per-cell risk
                 zone_scores = []
                 for ((x0,y0,x1,y1), cell_id) in grid_boxes:
-                    # CNN CAM mean (0 if CAM is unavailable)
                     cnn_cell = float(cam_up[y0:y1, x0:x1].mean()) if cam_up is not None else 0.0
-                    # Positive head drop only; index via cell coords
                     r_idx = min(GRID_ROWS-1, max(0, y0 // max(1, cell_h)))
                     c_idx = min(GRID_COLS-1, max(0, x0 // max(1, cell_w)))
                     drop_cell = max(0.0, float(delta_zone[r_idx, c_idx]))
-                    # Flow mean
                     fmag_cell = float(flow_mag[y0:y1, x0:x1].mean()) if FLOW_ENABLED else 0.0
-                    # Risk fusion (lightweight normalization)
                     risk = (W_CAM * cnn_cell
                             + W_DROP * (drop_cell / max_heads_now)
                             + W_FLOW * (fmag_cell / (mean_flow + 1e-6)))
                     zone_scores.append(risk)
-                    scores_flat.append((cell_id, x0, y0, x1, y1, cnn_cell, drop_cell, fmag_cell, risk))
+                    scores_flat.append((cell_id, x0, y0, x1, y1, risk))
+
+                # Track BEST snapshot frame for the event
+                if zone_scores:
+                    best_i = int(np.argmax(zone_scores))
+                    (bx0,by0,bx1,by1), bcell = grid_boxes[best_i]
+                    best_risk = float(zone_scores[best_i])
+                    if (current_best is None) or (best_risk > current_best["risk_score"]):
+                        current_best = {
+                            "event_id": event_id, "frame": frame_bgr.copy(), "timecode": tc,
+                            "zone_id": bcell, "x0": bx0, "y0": by0, "x1": bx1, "y1": by1,
+                            "risk_score": best_risk, "frame_index": f
+                        }
+
+                # Buffer rows for events_zones.csv (optional analysis)
+                for (cell_id, x0, y0, x1, y1, risk) in scores_flat:
+                    events_z_rows.append({
+                        "event_id": event_id, "frame": f, "timecode": tc, "zone_id": cell_id,
+                        "x0": x0, "y0": y0, "x1": x1, "y1": y1, "risk_score": risk
+                    })
             # ---------------------------------------------------------------------------
 
-            # overlay
-            vis = frame_bgr.copy()
-            for (cx, cy) in head_pts:
-                cv2.circle(vis, (int(cx), int(cy)), 4, (255,255,0), -1)
-            if draw_links:
-                for (i_prev, j_curr) in matches:
-                    x1, y1 = prev_pts[i_prev]; x2, y2 = head_pts[j_curr]
-                    cv2.line(vis, (int(x1), int(y1)), (int(x2), int(y2)), (255, 0, 0), 2)
+            # Optional overlay video (disabled in snapshot mode)
+            if not SNAPSHOT_ONLY:
+                vis = frame_bgr.copy()
+                for (cx, cy) in head_pts:
+                    cv2.circle(vis, (int(cx), int(cy)), 4, (255,255,0), -1)
+                if draw_links:
+                    for (i_prev, j_curr) in matches:
+                        x1, y1 = prev_pts[i_prev]; x2, y2 = head_pts[j_curr]
+                        cv2.line(vis, (int(x1), int(y1)), (int(x2), int(y2)), (255, 0, 0), 2)
+                if XAI_ENABLED and zone_scores is not None and final_label == 1:
+                    # thin grid
+                    for (x0,y0,x1,y1), _ in grid_boxes:
+                        cv2.rectangle(vis, (x0,y0), (x1,y1), (255,255,255), 1)
+                    # top-K (but keep K=1 for video to be subtle)
+                    draw_top_cells(vis, grid_boxes, np.array(zone_scores), K=min(1, TOPK_CELLS))
+                banner_h = max(40, H//14)
+                color = (0,0,255) if final_label==1 else (0,180,0)
+                cv2.rectangle(vis, (0,0), (W, banner_h), color, -1)
+                cv2.putText(
+                    vis,
+                    f"heads={curr_count}  Δ={delta:+d}  p_cnn={p_cnn:.2f} (τ={cnn_threshold:.2f})  "
+                    f"rule={combine_rule}  label={'Stampede' if final_label==1 else 'No Stampede'}  t={tc}",
+                    (12, banner_h-12), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255,255,255), 2, cv2.LINE_AA
+                )
+                if out and out.isOpened(): out.write(vis)
 
-            # XAI drawing: grid + top-K cells on positive frames
-            if XAI_ENABLED and final_label == 1:
-                # draw thin grid
-                for (x0,y0,x1,y1), _ in grid_boxes:
-                    cv2.rectangle(vis, (x0,y0), (x1,y1), (255,255,255), 1)
-                # draw top cells if we computed scores
-                if zone_scores is not None and len(zone_scores) == len(grid_boxes):
-                    draw_top_cells(vis, grid_boxes, np.array(zone_scores), K=TOPK_CELLS)
-
-            banner_h = max(40, H//14)
-            color = (0,0,255) if final_label==1 else (0,180,0)
-            cv2.rectangle(vis, (0,0), (W, banner_h), color, -1)
-            cv2.putText(
-                vis,
-                f"heads={curr_count}  Δ={delta:+d}  p_cnn={p_cnn:.2f} (τ={cnn_threshold:.2f})  "
-                f"rule={combine_rule}  label={'Stampede' if final_label==1 else 'No Stampede'}  t={tc}",
-                (12, banner_h-12), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255,255,255), 2, cv2.LINE_AA
-            )
-
-            # Buffer XAI rows for CSV
-            if XAI_ENABLED and final_label == 1 and scores_flat:
-                for (cell_id, x0, y0, x1, y1, cnn_cell, drop_cell, fmag_cell, risk) in scores_flat:
-                    events_z_rows.append({
-                        "event_id": event_id,
-                        "frame": f,
-                        "timecode": tc,
-                        "zone_id": cell_id,
-                        "x0": x0, "y0": y0, "x1": x1, "y1": y1,
-                        "cnn_cam_mean": cnn_cell,
-                        "head_delta": drop_cell,
-                        "flow_mag": fmag_cell,
-                        "risk_score": risk
-                    })
-
-            if out.isOpened(): out.write(vis)
             prev_pts, prev_count = head_pts, curr_count
 
             processed += 1
@@ -838,28 +869,37 @@ def analyze_video(
                 status.write(f"Processed {processed}/{total_steps} sampled frames…")
         f += 1
 
-    # close open event at EOF
+    # Close open event at EOF
     if in_event and start_f is not None:
         end_t = (f-1) / fps
         events_rows.append((start_f, f-1, start_t, end_t,
                             sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
+        save_current_best()
 
     cap.release()
-    if out.isOpened(): out.release()
+    if not SNAPSHOT_ONLY and out and out.isOpened(): out.release()
 
-    playable_path, ok, _ = transcode_to_h264(raw_path, mp4_path, fps)
-    if not ok: st.warning("Transcode failed; preview may not play.")
+    # H.264 transcode only if we actually wrote a video
+    if not SNAPSHOT_ONLY and os.path.exists(raw_path) and os.path.getsize(raw_path) > 0:
+        playable_path, ok, _ = transcode_to_h264(raw_path, mp4_path, fps)
+        if not ok: st.warning("Transcode failed; preview may not play.")
+    else:
+        playable_path = ""  # snapshot mode
 
     prog.progress(1.0); status.write("Done.")
+
     df_frames = pd.DataFrame(frames_rows[1:], columns=frames_rows[0])
     df_events = pd.DataFrame(events_rows[1:], columns=events_rows[0])
+    # events_zones.csv (optional analytics)
+    if events_z_rows:
+        df_events_zones = pd.DataFrame(events_z_rows)
+    else:
+        df_events_zones = pd.DataFrame(columns=["event_id","frame","timecode","zone_id","x0","y0","x1","y1","risk_score"])
 
-    # Build events_zones DataFrame for download (if any)
-    df_events_zones = pd.DataFrame(events_z_rows) if events_z_rows else pd.DataFrame(
-        columns=["event_id","frame","timecode","zone_id","x0","y0","x1","y1",
-                 "cnn_cam_mean","head_delta","flow_mag","risk_score"]
-    )
-    st.session_state["video_xai"] = {"events_zones": df_events_zones}
+    st.session_state["video_xai"] = {
+        "events_zones": df_events_zones,
+        "snapshots": snapshots
+    }
     return df_frames, df_events, playable_path
 
 # =============================================================================
@@ -876,7 +916,7 @@ if go:
         with st.spinner("Analyzing video…"):
             df_frames, df_events, labeled_path = analyze_video(tmp.name, model)
 
-        # -------- Persist results so any rerun (e.g., downloads) keeps the view --------
+        # Persist results so reruns keep the view
         st.session_state["video_results"] = {
             "df_frames": df_frames,
             "df_events": df_events,
