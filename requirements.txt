@@ -1,14 +1,12 @@
-# --- core ---
+--only-binary=:all:
+
 streamlit==1.36.0
 tensorflow==2.20.0
-numpy>=2.0.0
-pandas>=2.2.2
-scipy>=1.13.1
-opencv-python-headless>=4.12.0.88
-h5py>=3.10
-imageio-ffmpeg>=0.4.9
-tqdm>=4.66
-altair>=5.3.0
-
-# Optional: pin protobuf to avoid TF resolver noise on Cloud
-protobuf<5
+numpy==2.0.1
+pandas==2.2.2
+scipy==1.13.1
+opencv-python-headless==4.12.0.88
+h5py==3.11.0
+imageio-ffmpeg==0.4.9
+tqdm==4.66.4
+altair==5.3.0
