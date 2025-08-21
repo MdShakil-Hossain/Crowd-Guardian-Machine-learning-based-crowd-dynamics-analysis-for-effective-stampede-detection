@@ -408,16 +408,15 @@ def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
             inputs=model.inputs, outputs=[target_layer.output, model.outputs]
         )
 
-    import tensorflow as tf
-    with tf.GradientTape() as tape:
+    with __import__("tensorflow").GradientTape() as tape:
         conv_out, preds = grad_model(x_100x100x1, training=False)
         score_vec = _select_score_vector(preds)
 
     grads = tape.gradient(score_vec, conv_out)
     if grads is None:
         return None
-    weights = tf.reduce_mean(grads, axis=(1, 2), keepdims=True)
-    cam = tf.nn.relu(tf.reduce_sum(weights * conv_out, axis=-1))
+    weights = __import__("tensorflow").reduce_mean(grads, axis=(1, 2), keepdims=True)
+    cam = __import__("tensorflow").nn.relu(__import__("tensorflow").reduce_sum(weights * conv_out, axis=-1))
     cam = cam[0].numpy()
     cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
     return cam
@@ -446,28 +445,24 @@ def heads_per_cell(head_pts, rows, cols, cell_w, cell_h):
         counts[r, c] += 1
     return counts
 
-# ---- Robust display/load utilities (avoid TypeError in st.image) ----
-def _safe_float(x, default=0.0):
+# ---- Robust image loader for Streamlit (avoid st.image TypeError) ----
+def _load_image_bytes_png(path: str):
+    """
+    Return PNG-encoded bytes for the image at `path` using OpenCV.
+    This bypasses PIL and avoids the 'channels' argument entirely.
+    """
     try:
-        if isinstance(x, (list, tuple, np.ndarray)):
-            x = np.asarray(x).flatten()[0]
-        return float(x)
-    except Exception:
-        return default
-
-def _load_image_rgb(path: str):
-    """Load image as uint8 RGB numpy array (prefers OpenCV). Return None if unreadable."""
-    try:
+        # Read in a way that tolerates weird paths
         data = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
-        # (np.fromfile handles non-ASCII paths on some systems)
         if data is None:
             data = cv2.imread(path, cv2.IMREAD_COLOR)
         if data is None:
             return None
-        rgb = cv2.cvtColor(data, cv2.COLOR_BGR2RGB)
-        if rgb.dtype != np.uint8:
-            rgb = np.clip(rgb, 0, 255).astype(np.uint8)
-        return rgb
+        # We can directly encode BGR -> PNG; no need to convert to RGB for PNG encoding
+        ok, buf = cv2.imencode(".png", data)
+        if not ok:
+            return None
+        return buf.tobytes()
     except Exception:
         return None
 
@@ -612,21 +607,23 @@ def render_results(df_frames, df_events, labeled_path):
                            file_name="events_zones.csv", mime="text/csv",
                            use_container_width=True, key=f"dl_events_z_{uid}")
 
-    # Event snapshots (robust: always pass RGB np.array to st.image)
+    # --- Event Snapshots (red-marked zone) ---
     snapshots = extra.get("snapshots", [])
     if snapshots:
         st.markdown('<h2 class="cg-h2">Event Snapshots (red-marked zone)</h2>', unsafe_allow_html=True)
         snap_rows = []
         for s in snapshots:
             path = s.get("path") or ""
-            risk = _safe_float(s.get("risk_score", 0.0), 0.0)
+            risk = float(s.get("risk_score", 0.0)) if s.get("risk_score", None) is not None else 0.0
             caption = f"Event {s.get('event_id','?')} • frame {s.get('frame_index','?')} • {s.get('timecode','?')} • {s.get('zone_id','?')} (risk {risk:.2f})"
+
             if isinstance(path, str) and os.path.exists(path) and os.path.getsize(path) > 0:
-                img = _load_image_rgb(path)
+                img_bytes = _load_image_bytes_png(path)
                 col1, col2 = st.columns([2,1])
                 with col1:
-                    if isinstance(img, np.ndarray) and img.ndim == 3 and img.dtype == np.uint8:
-                        st.image(img, caption=caption, channels="RGB", use_container_width=True)
+                    if isinstance(img_bytes, (bytes, bytearray)) and len(img_bytes) > 0:
+                        # No 'channels' arg — safest across Streamlit versions
+                        st.image(img_bytes, caption=caption, use_container_width=True)
                     else:
                         st.warning(f"Snapshot could not be displayed (event {s.get('event_id','?')}).")
                 with col2:
