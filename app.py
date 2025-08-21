@@ -45,13 +45,13 @@ TARGET_FPS    = None  # None = use every frame
 
 # ---------- XAI / Snapshot settings ----------
 XAI_ENABLED   = True           # Grad-CAM + zone risk
-GRID_ROWS     = 6              # ↑ finer grid to localize collapses
+GRID_ROWS     = 6              # finer grid to localize collapses
 GRID_COLS     = 6
-W_CAM, W_DROP, W_FLOW = 0.30, 0.45, 0.25   # give real weight to drop & motion
-FLOW_ENABLED  = True           # ✅ include optical flow
+W_CAM, W_DROP, W_FLOW = 0.30, 0.45, 0.25   # weight saliency, local head-drop, downward motion
+FLOW_ENABLED  = True           # include optical flow
 DROP_GATE     = 1              # require >=1 head drop in a cell OR ...
 FLOW_GATE     = 0.30           # ... downward flow >= 0.30× mean
-SNAPSHOT_ONLY = True           # ✅ Save one red-marked frame per event; no full overlay video
+SNAPSHOT_ONLY = True           # save one red-marked frame per event; no full overlay video
 
 # ---------- Model location ----------
 APP_DIR = Path(__file__).resolve().parent
@@ -306,7 +306,8 @@ def build_blob_detector(frame_w, frame_h, min_frac=MIN_FRAC, max_frac=MAX_FRAC,
     p.minThreshold, p.maxThreshold, p.thresholdStep = 10, 220, thresh_step
     p.filterByArea, p.minArea, p.maxArea = True, minArea, maxArea
     p.filterByCircularity, p.minCircularity = True, min_circ
-    p.filterByInertia, p.minInertiaRatio = True, min_iner
+    # ✅ FIX: use the correct parameter name "min_inertia"
+    p.filterByInertia, p.minInertiaRatio = True, min_inertia
     p.filterByConvexity = p.filterByColor = False
     return (cv2.SimpleBlobDetector(p) if int(cv2.__version__.split('.')[0]) < 3
             else cv2.SimpleBlobDetector_create(p))
