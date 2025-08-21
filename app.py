@@ -44,6 +44,14 @@ MIN_INER      = 0.10
 DRAW_LINKS    = True
 TARGET_FPS    = None  # None = use every frame
 
+# ---------- Stampede (running-panic) thresholds ----------
+STAMP_BASELINE_SEC   = 5.0   # learn speed baseline for first ~5s
+FLOW_MEAN_Z          = 1.0   # mean speed >= baseline + Z*std
+FLOW_P95_MIN         = 3.0   # absolute 95th-pct speed gate (px/frame)
+FLOW_FAST_FRAC_MIN   = 0.25  # ≥25% pixels moving faster than baseline
+FLOW_COH_MIN         = 0.55  # flow direction alignment (0..1)
+FLOW_DIV_MIN         = 0.04  # outward divergence threshold
+
 # ---------- XAI / Snapshot settings ----------
 XAI_ENABLED   = True
 GRID_ROWS     = 6
@@ -77,7 +85,7 @@ DEFAULT_MODEL_URL = (
 MODEL_URL = st.secrets.get("MODEL_URL", DEFAULT_MODEL_URL)
 
 # =============================================================================
-# Global styles (HTML/CSS) — your original look preserved
+# Global styles (HTML/CSS) — original look preserved
 # =============================================================================
 st.markdown(
     """
@@ -188,9 +196,9 @@ components.html("""
   addEventListener('resize', resize); resize();
   const N = 120;
   const P = Array.from({length:N}, () => ({
-    x: Math.random()*c.width, y: Math.random()*c.height,
-    vx: -0.25 + Math.random()*0.5, vy: -0.25 + Math.random()*0.5,
-    s: 0.6 + Math.random()*1.6
+     x: Math.random()*c.width, y: Math.random()*c.height,
+     vx: -0.25 + Math.random()*0.5, vy: -0.25 + Math.random()*0.5,
+     s: 0.6 + Math.random()*1.6
   }));
   function tick(){
     ctx.clearRect(0,0,c.width,c.height);
@@ -211,7 +219,7 @@ components.html("""
 """, height=0)
 
 # =============================================================================
-# Sidebar — PROJECT DETAILS
+# Sidebar — PROJECT DETAILS + Detection Mode
 # =============================================================================
 with st.sidebar:
     st.markdown('<div class="sb-brand">🛡️ Crowd Guardian</div>', unsafe_allow_html=True)
@@ -263,6 +271,14 @@ with st.sidebar:
     st.markdown(
         f'<div class="sb-card sb-small">Environment: TF {tf_ver} • NumPy {np.__version__} • OpenCV {cv2.__version__}</div>',
         unsafe_allow_html=True,
+    )
+
+    # ---- Detection Mode switch ----
+    detection_mode = st.selectbox(
+        "Detection Mode",
+        ["Hybrid (Default)", "Stampede (Running Panic)", "Crush/Surge (Compression)"],
+        index=0,
+        help="Hybrid triggers on either running-panic (flow) or crush (head-drop) cues."
     )
 
 # =============================================================================
@@ -463,6 +479,24 @@ def _show_image_resilient(path: str, caption: str) -> bool:
     except Exception:
         return False
 
+# -------- Flow baseline helper (stampede metrics) --------
+class _FlowBaseline:
+    def __init__(self, eff_fps, base_sec=STAMP_BASELINE_SEC):
+        n = max(1, int(round(base_sec * max(1.0, eff_fps))))
+        self.vals = deque(maxlen=n)
+    def update(self, v: float):
+        self.vals.append(float(v))
+    @property
+    def ready(self) -> bool:
+        return len(self.vals) >= max(5, self.vals.maxlen // 2)
+    @property
+    def mean(self) -> float:
+        return float(np.mean(self.vals)) if self.vals else 0.0
+    @property
+    def std(self) -> float:
+        s = float(np.std(self.vals)) if self.vals else 0.0
+        return max(s, 1e-6)
+
 # =============================================================================
 # Load model (silent) + status
 # =============================================================================
@@ -531,17 +565,18 @@ def render_results(df_frames, df_events, labeled_path):
         </script>
         """, height=160)
 
-    # Status banner
+    # Status banner (include active mode)
     st.markdown('<div class="cg-card">', unsafe_allow_html=True)
+    mode_short = st.session_state.get("detection_mode_label", "Hybrid")
     status_cls = "status-ok" if total_events > 0 else "status-safe"
-    status_text = "Stampede detected" if total_events > 0 else "No stampede detected"
+    status_text = f"{mode_short}: {'Stampede detected' if total_events > 0 else 'No stampede detected'}"
     st.markdown(
         f'<div class="status-banner {status_cls}"><span class="status-dot"></span>{status_text}</div>',
         unsafe_allow_html=True
     )
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Charts
+    # Charts (existing)
     if not df_frames.empty:
         base = alt.Chart(df_frames).properties(height=240)
         left, right = st.columns(2)
@@ -562,6 +597,28 @@ def render_results(df_frames, df_events, labeled_path):
                 tooltip=['frame_index','timecode','head_count','delta_vs_prev']
             )
             st.altair_chart(line_head.interactive(), use_container_width=True)
+
+        # NEW tiny charts for flow metrics
+        left2, right2 = st.columns(2)
+        with left2:
+            st.subheader("Flow Speed (mean & p95)")
+            line_fmean = base.mark_line().encode(
+                x=alt.X('frame_index:Q', title='Frame'),
+                y=alt.Y('flow_mean:Q', title='px/frame'),
+                tooltip=['frame_index','timecode','flow_mean','flow_p95']
+            )
+            line_fp95  = base.mark_line(strokeDash=[4,4]).encode(
+                x='frame_index:Q', y=alt.Y('flow_p95:Q', title=None)
+            )
+            st.altair_chart((line_fmean + line_fp95).interactive(), use_container_width=True)
+        with right2:
+            st.subheader("Flow Coherence")
+            line_coh = base.mark_line().encode(
+                x=alt.X('frame_index:Q', title='Frame'),
+                y=alt.Y('flow_coh:Q', title='coherence (0–1)', scale=alt.Scale(domain=[0,1])),
+                tooltip=['frame_index','timecode','flow_coh','flow_div_out','flow_fast_frac']
+            )
+            st.altair_chart(line_coh.interactive(), use_container_width=True)
 
     # Tables + downloads
     if not df_events.empty:
@@ -584,12 +641,7 @@ def render_results(df_frames, df_events, labeled_path):
                            file_name="frame_preds.csv", mime="text/csv",
                            use_container_width=True, key=f"dl_frames_{uid}")
     with c3:
-        if labeled_path and os.path.exists(labeled_path) and os.path.getsize(labeled_path) > 0:
-            with open(labeled_path, "rb") as fh:
-                st.download_button("⬇️ labeled.mp4", fh.read(), file_name=os.path.basename(labeled_path),
-                                   mime="video/mp4", use_container_width=True, key=f"dl_video_{uid}")
-        else:
-            st.button("Video disabled (snapshot mode)", disabled=True, use_container_width=True, key=f"dl_na_{uid}")
+        st.button("Video disabled (snapshot mode)", disabled=True, use_container_width=True, key=f"dl_na_{uid}")
 
     extra = st.session_state.get("video_xai", {})
     df_events_zones = extra.get("events_zones")
@@ -635,8 +687,7 @@ def render_results(df_frames, df_events, labeled_path):
                            use_container_width=True)
 
     st.markdown('<h2 class="cg-h2">Labeled Video Preview</h2>', unsafe_allow_html=True)
-    if labeled_path and os.path.exists(labeled_path): st.video(labeled_path)
-    else: st.info("Preview unavailable.")
+    st.info("Preview unavailable.")
 
 # Persisted rerender
 if "video_results" in st.session_state:
@@ -712,6 +763,7 @@ def analyze_video(
     min_circ=MIN_CIRC,
     min_iner=MIN_INER,
     draw_links=DRAW_LINKS,
+    detection_mode="Hybrid (Default)",
 ):
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -726,8 +778,19 @@ def analyze_video(
     max_match_dist = max(15, int(0.03 * max(W, H)))
     detector = build_blob_detector(W, H, min_frac, max_frac, min_circ, min_iner)
 
-    frames_rows = [("frame_index","time_sec","timecode","head_count","delta_vs_prev",
-                    "prob_cnn","cnn_label","heads_label","final_label")]
+    # stampede flow baseline state
+    eff_fps = (fps / step) if step > 0 else fps
+    flow_baseline = _FlowBaseline(eff_fps, base_sec=STAMP_BASELINE_SEC)
+    prev_gray_for_metrics = None  # for stampede flow metrics
+
+    frames_rows = [(
+        "frame_index","time_sec","timecode",
+        "head_count","delta_vs_prev",
+        "prob_cnn","cnn_label","heads_label",
+        "flow_mean","flow_p95","flow_coh","flow_div_out","flow_fast_frac",
+        "stampede_label",
+        "final_label"
+    )]
     events_rows = [("start_frame","end_frame","start_time_sec","end_time_sec","start_tc","end_tc","duration_sec")]
 
     out_dir = os.path.join(os.getcwd(), "outputs")
@@ -758,12 +821,10 @@ def analyze_video(
 
     def save_current_best():
         nonlocal current_best, snapshots
-        if not current_best:
-            return
+        if not current_best: return
         frame = current_best.pop("frame", None)
         if frame is None:
-            current_best = None
-            return
+            current_best = None; return
         x0,y0,x1,y1 = current_best["x0"], current_best["y0"], current_best["x1"], current_best["y1"]
         cv2.rectangle(frame, (x0,y0), (x1,y1), (0,0,255), 3)
         label = (
@@ -797,10 +858,54 @@ def analyze_video(
             gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
             gray = np.ascontiguousarray(gray, dtype=np.uint8)
 
+            # --- STAMPEDE (running-panic) METRICS via full optical flow ---
+            flow_mean = flow_p95 = flow_coh = flow_div_out = flow_fast_frac = 0.0
+            stampede_label = 0
+            if prev_gray_for_metrics is not None and prev_gray_for_metrics.shape == gray.shape:
+                try:
+                    flow_full = cv2.calcOpticalFlowFarneback(
+                        prev_gray_for_metrics, gray, None,
+                        0.5, 3, 15, 3, 5, 1.2, 0
+                    )
+                    fx = flow_full[..., 0].astype(np.float32)
+                    fy = flow_full[..., 1].astype(np.float32)
+                    mag, ang = cv2.cartToPolar(fx, fy, angleInDegrees=False)
+
+                    flow_mean = float(np.mean(mag))
+                    flow_p95  = float(np.percentile(mag, 95))
+
+                    # Directional coherence (weighted by speed) in [0..1]
+                    w = mag + 1e-6
+                    c = float(np.average(np.cos(ang), weights=w))
+                    s = float(np.average(np.sin(ang), weights=w))
+                    flow_coh = float(np.sqrt(c*c + s*s))
+
+                    # Outward divergence (expansion); average of positive divergence over moving areas
+                    du_dx = cv2.Sobel(fx, cv2.CV_32F, 1, 0, ksize=3)
+                    dv_dy = cv2.Sobel(fy, cv2.CV_32F, 0, 1, ksize=3)
+                    div   = du_dx + dv_dy
+                    move_mask = (mag > max(0.5, flow_baseline.mean)).astype(np.float32)  # ignore near-static
+                    flow_div_out = float(np.sum(np.maximum(div, 0.0) * move_mask) / (np.sum(move_mask) + 1e-6))
+
+                    # Baseline-relative fast fraction
+                    if not flow_baseline.ready:
+                        flow_baseline.update(flow_mean)
+                    fast_gate = flow_baseline.mean + FLOW_MEAN_Z * flow_baseline.std
+                    flow_fast_frac = float(np.mean(mag > fast_gate)) if flow_baseline.ready else 0.0
+
+                    # Stampede rule: speed + (alignment OR outward burst)
+                    cond_speed   = (flow_baseline.ready and flow_fast_frac >= FLOW_FAST_FRAC_MIN) \
+                                   or (flow_p95 >= FLOW_P95_MIN) \
+                                   or (flow_mean >= (flow_baseline.mean + FLOW_MEAN_Z*flow_baseline.std))
+                    cond_pattern = (flow_coh >= FLOW_COH_MIN) or (flow_div_out >= FLOW_DIV_MIN)
+                    stampede_label = 1 if (cond_speed and cond_pattern) else 0
+                except cv2.error:
+                    pass
+            prev_gray_for_metrics = gray.copy()
+
+            # --- Heads detection & tracking for crush/surge (collapse) ---
             head_pts, head_radii = detect_heads_gray(gray, detector)
             curr_count = len(head_pts)
-
-            # update tracks (short histories kept)
             tracks = update_tracks(tracks, head_pts, head_radii, max_match_dist, window_frames)
 
             # legacy global deltas for interval logic
@@ -809,16 +914,33 @@ def analyze_video(
             else:
                 delta = prev_count - curr_count
                 r = (prev_count - curr_count) / max(1, prev_count)
-                y_heads = 1 if (delta >= abs_drop or r >= rel_drop) else 0
+                y_heads = 1 if (delta >= ABS_DROP or r >= REL_DROP) else 0
 
+            # CNN
             x = preprocess_for_cnn(gray)
             p_cnn = float(model.predict(x, verbose=0)[0][0])
             y_cnn = 1 if p_cnn >= cnn_threshold else 0
-            final_label = combine_labels(y_heads, y_cnn, combine_rule)
+
+            # Mode-aware final label
+            final_crush = combine_labels(y_heads, y_cnn, COMBINE_RULE)
+            final_stamp = combine_labels(stampede_label, y_cnn, COMBINE_RULE)
+            mode = (detection_mode or "Hybrid").lower()
+            if "stampede" in mode:
+                final_label = final_stamp
+            elif "crush" in mode or "surge" in mode:
+                final_label = final_crush
+            else:  # Hybrid
+                final_label = 1 if (final_crush or final_stamp) else 0
 
             t = f / fps; tc = sec_to_tc(t)
-            frames_rows.append((f, t, tc, curr_count, int(delta),
-                                p_cnn, y_cnn, y_heads, final_label))
+            frames_rows.append((
+                f, t, tc,
+                curr_count, int(delta),
+                p_cnn, y_cnn, y_heads,
+                flow_mean, flow_p95, flow_coh, flow_div_out, flow_fast_frac,
+                stampede_label,
+                final_label
+            ))
 
             # Event handling
             if final_label == 1 and not in_event:
@@ -831,7 +953,8 @@ def analyze_video(
                     end_t = (f-1) / fps
                     events_rows.append((start_f, f-1, start_t, end_t,
                                         sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
-                    save_current_best()
+                    # save best snapshot of the event
+                    if current_best: save_current_best()
                 in_event, start_f, start_t = False, None, None
 
             # -------------------- XAI computations (positive frames) --------------------
@@ -894,8 +1017,6 @@ def analyze_video(
                     ci = cell_index_for(xh, yh)
                     cell_records[ci]["heads"] += 1
 
-                collapse_candidates = []
-
                 for tinfo in tracks:
                     (xh, yh) = tinfo["pos"]; rhead = max(2.0, tinfo.get("r", 6.0))
                     if len(tinfo["hist"]) < (window_frames + 1):
@@ -936,7 +1057,6 @@ def analyze_video(
                         rec["sum_dy_norm"] += dy_norm_abs
                         rec["max_dy_norm"] = max(rec["max_dy_norm"], dy_norm_abs)
                         rec["torso_flow_accum"] += torso_scene
-                        collapse_candidates.append((ci, dy_norm_abs, torso_scene, rel_drop_rad))
 
                 # per-cell CAM and final risk
                 for rec in cell_records:
@@ -950,7 +1070,6 @@ def analyze_video(
                     # Mass-movement penalty only if nearly everyone drops together
                     penalty = 0.0
                     if frac_down > MASS_DROP_PENALTY_START:
-                        # scale 0..1 over [start, 1.0]
                         scale = min(1.0, (frac_down - MASS_DROP_PENALTY_START) / (1.0 - MASS_DROP_PENALTY_START))
                         penalty = MASS_DROP_PENALTY_STRENGTH * scale
 
@@ -1004,7 +1123,7 @@ def analyze_video(
         end_t = (f-1) / fps
         events_rows.append((start_f, f-1, start_t, end_t,
                             sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
-        save_current_best()
+        if current_best: save_current_best()
 
     cap.release()
 
@@ -1018,7 +1137,7 @@ def analyze_video(
                  "risk_score","cand","sum_dy_norm","max_dy_norm","heads_in_cell","cnn_cell"]
     )
     st.session_state["video_xai"] = {"events_zones": df_events_zones, "snapshots": snapshots}
-    return df_frames, df_events, labeled_path  # snapshot mode => no video
+    return df_frames, df_events, ""  # snapshot mode => no video
 
 # =============================================================================
 # Run
@@ -1032,11 +1151,13 @@ if go:
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded.name)[1])
         tmp.write(uploaded.read()); tmp.close()
         with st.spinner("Analyzing video…"):
-            df_frames, df_events, labeled_path = analyze_video(tmp.name, model)
-
+            df_frames, df_events, labeled_path = analyze_video(
+                tmp.name, model, detection_mode=detection_mode
+            )
         st.session_state["video_results"] = {
             "df_frames": df_frames,
             "df_events": df_events,
             "labeled_path": labeled_path,
         }
+        st.session_state["detection_mode_label"] = detection_mode
         render_results(df_frames, df_events, labeled_path)
