@@ -1,4 +1,4 @@
-# app.py — Crowd Guardian (Video only)
+# app.py — Crowd Guardian (Video only) + XAI overlays (Grad-CAM + Zone risk)
 # Premium UI: custom HTML/CSS, decorated sidebar, status banner (no timeline bar),
 # Altair charts, JS confetti, animated particles background, and
 # **session_state persistence** so downloads don't "refresh away" your results.
@@ -41,6 +41,14 @@ MIN_CIRC      = 0.20
 MIN_INER      = 0.10
 DRAW_LINKS    = True
 TARGET_FPS    = None  # None = use every frame
+
+# ---------- XAI defaults (no UI knobs; minimal UI change) ----------
+XAI_ENABLED   = True       # master switch for explainability overlays
+GRID_ROWS     = 4
+GRID_COLS     = 4
+W_CAM, W_DROP, W_FLOW = 0.5, 0.4, 0.1   # zone fusion weights
+TOPK_CELLS    = 3
+FLOW_ENABLED  = False      # set True to include optical-flow magnitude in risk
 
 # ---------- Model location ----------
 APP_DIR = Path(__file__).resolve().parent
@@ -235,20 +243,8 @@ with st.sidebar:
         """,
         unsafe_allow_html=True
     )
-    st.markdown(
-        """
-        <div class="sb-card">
-          <b>Outputs</b>
-          <ul>
-            <li><code>events.csv</code> — start/end/duration of intervals</li>
-            <li><code>frame_preds.csv</code> — per-frame metrics & labels</li>
-            <li><code>labeled.mp4</code> — overlay video with live stats</li>
-          </ul>
-        </div>
-        """, unsafe_allow_html=True
-    )
     try:
-        import tensorflow as tf
+        import tensorflow as tf  # only for showing version; model loaded later
         tf_ver = tf.__version__
     except Exception:
         tf_ver = "not loaded"
@@ -361,6 +357,65 @@ def transcode_to_h264(src_path: str, dst_path: str, fps: float):
     proc = subprocess.run(cmd, capture_output=True, text=True)
     ok = (proc.returncode == 0) and os.path.exists(dst_path) and os.path.getsize(dst_path) > 0
     return (dst_path if ok else src_path), ok, (proc.stderr or "")
+
+# ========================== XAI: Grad-CAM + Grid helpers ==========================
+def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
+    """
+    Returns small CAM in [0,1]. If conv_layer_name is None, picks the last Conv2D layer.
+    Works with TensorFlow/Keras 2.20+; imports TF locally to avoid heavy top-level import.
+    """
+    import tensorflow as tf
+    # pick last conv if unspecified
+    if conv_layer_name is None:
+        conv_layers = [l for l in model.layers if isinstance(l, tf.keras.layers.Conv2D)]
+        if not conv_layers:
+            return None
+        conv_layer = conv_layers[-1]
+    else:
+        conv_layer = model.get_layer(conv_layer_name)
+
+    grad_model = tf.keras.Model([model.inputs], [conv_layer.output, model.output])
+    with tf.GradientTape() as tape:
+        conv_out, preds = grad_model(x_100x100x1, training=False)
+        score = preds[:, 0]  # binary: positive class score
+    grads = tape.gradient(score, conv_out)                      # (1,h,w,c)
+    weights = tf.reduce_mean(grads, axis=(1, 2), keepdims=True) # (1,1,1,c)
+    cam = tf.nn.relu(tf.reduce_sum(weights * conv_out, axis=-1))# (1,h,w)
+    cam = cam[0].numpy()
+    cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
+    return cam
+
+def upscale_cam(cam_small, W, H):
+    if cam_small is None:
+        return None
+    return cv2.resize(cam_small, (W, H), interpolation=cv2.INTER_CUBIC)
+
+def make_grid(W, H, rows=4, cols=4):
+    cell_w, cell_h = W // cols, H // rows
+    boxes = []
+    for r in range(rows):
+        for c in range(cols):
+            x0, y0 = c*cell_w, r*cell_h
+            x1 = W if c == cols-1 else (c+1)*cell_w
+            y1 = H if r == rows-1 else (r+1)*cell_h
+            boxes.append(((x0, y0, x1, y1), f"r{r}c{c}"))
+    return boxes, cell_w, cell_h
+
+def heads_per_cell(head_pts, rows, cols, cell_w, cell_h):
+    counts = np.zeros((rows, cols), dtype=int)
+    for (x, y) in head_pts:
+        c = min(cols-1, max(0, int(x // cell_w)))
+        r = min(rows-1, max(0, int(y // cell_h)))
+        counts[r, c] += 1
+    return counts
+
+def draw_top_cells(vis_bgr, grid_boxes, scores, K=3):
+    idx = np.argsort(scores)[::-1][:K]
+    for i in idx:
+        (x0, y0, x1, y1), cell_id = grid_boxes[i]
+        cv2.rectangle(vis_bgr, (x0, y0), (x1, y1), (0, 0, 255), 2)
+        cv2.putText(vis_bgr, f"{cell_id}:{scores[i]:.2f}", (x0+6, y0+18),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1, cv2.LINE_AA)
 
 # =============================================================================
 # Load model (silent) + status
@@ -494,6 +549,15 @@ def render_results(df_frames, df_events, labeled_path):
         else:
             st.button("Video unavailable", disabled=True, use_container_width=True, key=f"dl_na_{uid}")
 
+    # Extra download: events_zones.csv if XAI ran
+    extra = st.session_state.get("video_xai", {})
+    df_events_zones = extra.get("events_zones")
+    if isinstance(df_events_zones, pd.DataFrame) and not df_events_zones.empty:
+        st.download_button("⬇️ events_zones.csv",
+                           df_events_zones.to_csv(index=False).encode("utf-8"),
+                           file_name="events_zones.csv", mime="text/csv",
+                           use_container_width=True, key=f"dl_events_z_{uid}")
+
     st.markdown('<h2 class="cg-h2">Labeled Video Preview</h2>', unsafe_allow_html=True)
     if os.path.exists(labeled_path): st.video(labeled_path)
     else: st.info("Preview unavailable.")
@@ -562,6 +626,13 @@ def analyze_video(
     prev_pts, prev_count = [], None
     in_event, start_f, start_t = False, None, None
     min_event_frames = max(1, int(round(min_event_sec * (fps/step))))
+    event_id = 0  # XAI: running event index
+
+    # XAI state
+    grid_boxes, cell_w, cell_h = make_grid(W, H, rows=GRID_ROWS, cols=GRID_COLS)
+    prev_counts_zone = np.zeros((GRID_ROWS, GRID_COLS), dtype=int)
+    prev_gray_for_flow = None
+    events_z_rows = []  # buffer rows for events_zones.csv
 
     prog = st.progress(0.0); status = st.empty()
     processed = 0; total_steps = (N // step + 1) if N > 0 else 0
@@ -585,6 +656,7 @@ def analyze_video(
                 y_heads = 1 if (delta >= abs_drop or r >= rel_drop) else 0
 
             x = preprocess_for_cnn(gray)
+            # NOTE: model expects grayscale (100x100x1)
             p_cnn = float(model.predict(x, verbose=0)[0][0])
             y_cnn = 1 if p_cnn >= cnn_threshold else 0
             final_label = combine_labels(y_heads, y_cnn, combine_rule)
@@ -593,8 +665,10 @@ def analyze_video(
             frames_rows.append((f, t, tc, curr_count, int(delta),
                                 p_cnn, y_cnn, y_heads, final_label))
 
+            # Event boundary bookkeeping
             if final_label == 1 and not in_event:
                 in_event, start_f, start_t = True, f, t
+                event_id += 1
             elif final_label == 0 and in_event:
                 dur_frames = (f - start_f) // step
                 if dur_frames >= min_event_frames:
@@ -602,6 +676,56 @@ def analyze_video(
                     events_rows.append((start_f, f-1, start_t, end_t,
                                         sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
                 in_event, start_f, start_t = False, None, None
+
+            # -------------------- XAI computations (before drawing) --------------------
+            cam_up = None
+            zone_scores = None
+            scores_flat = []
+            if XAI_ENABLED and final_label == 1:
+                # 1) Grad-CAM
+                cam_small = gradcam_heatmap(model, x)
+                cam_up = upscale_cam(cam_small, W, H) if cam_small is not None else None
+
+                # 2) Per-cell head counts and deltas
+                counts_now = heads_per_cell(head_pts, GRID_ROWS, GRID_COLS, cell_w, cell_h)
+                delta_zone = prev_counts_zone - counts_now
+                prev_counts_zone = counts_now
+
+                # 3) Optional flow magnitude
+                if FLOW_ENABLED:
+                    if prev_gray_for_flow is None:
+                        flow_mag = np.zeros((H, W), dtype=np.float32)
+                    else:
+                        flow = cv2.calcOpticalFlowFarneback(prev_gray_for_flow, gray,
+                                                            pyr_scale=0.5, levels=3, winsize=15,
+                                                            iterations=3, poly_n=5, poly_sigma=1.2, flags=0)
+                        flow_mag = np.sqrt(flow[...,0]**2 + flow[...,1]**2).astype(np.float32)
+                    prev_gray_for_flow = gray.copy()
+                else:
+                    flow_mag = np.zeros((H, W), dtype=np.float32)
+
+                # Safe normalizers
+                max_heads_now = max(1.0, float(counts_now.max()))
+                mean_flow = float(flow_mag.mean()) if FLOW_ENABLED else 1.0
+
+                # 4) Aggregate per-cell risk
+                zone_scores = []
+                for ((x0,y0,x1,y1), cell_id) in grid_boxes:
+                    # CNN CAM mean
+                    cnn_cell = float(cam_up[y0:y1, x0:x1].mean()) if cam_up is not None else 0.0
+                    # Positive head drop only; index via cell coords
+                    r_idx = min(GRID_ROWS-1, max(0, y0 // max(1, cell_h)))
+                    c_idx = min(GRID_COLS-1, max(0, x0 // max(1, cell_w)))
+                    drop_cell = max(0.0, float(delta_zone[r_idx, c_idx]))
+                    # Flow mean
+                    fmag_cell = float(flow_mag[y0:y1, x0:x1].mean()) if FLOW_ENABLED else 0.0
+                    # Risk fusion (lightweight normalization)
+                    risk = (W_CAM * cnn_cell
+                            + W_DROP * (drop_cell / max_heads_now)
+                            + W_FLOW * (fmag_cell / (mean_flow + 1e-6)))
+                    zone_scores.append(risk)
+                    scores_flat.append((cell_id, x0, y0, x1, y1, cnn_cell, drop_cell, fmag_cell, risk))
+            # ---------------------------------------------------------------------------
 
             # overlay
             vis = frame_bgr.copy()
@@ -611,6 +735,15 @@ def analyze_video(
                 for (i_prev, j_curr) in matches:
                     x1, y1 = prev_pts[i_prev]; x2, y2 = head_pts[j_curr]
                     cv2.line(vis, (int(x1), int(y1)), (int(x2), int(y2)), (255, 0, 0), 2)
+
+            # XAI drawing: grid + top-K cells on positive frames
+            if XAI_ENABLED and final_label == 1:
+                # draw thin grid
+                for (x0,y0,x1,y1), _ in grid_boxes:
+                    cv2.rectangle(vis, (x0,y0), (x1,y1), (255,255,255), 1)
+                # draw top cells if we computed scores
+                if zone_scores is not None and len(zone_scores) == len(grid_boxes):
+                    draw_top_cells(vis, grid_boxes, np.array(zone_scores), K=TOPK_CELLS)
 
             banner_h = max(40, H//14)
             color = (0,0,255) if final_label==1 else (0,180,0)
@@ -622,6 +755,21 @@ def analyze_video(
                 (12, banner_h-12), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255,255,255), 2, cv2.LINE_AA
             )
 
+            # Buffer XAI rows for CSV
+            if XAI_ENABLED and final_label == 1 and scores_flat:
+                for (cell_id, x0, y0, x1, y1, cnn_cell, drop_cell, fmag_cell, risk) in scores_flat:
+                    events_z_rows.append({
+                        "event_id": event_id,
+                        "frame": f,
+                        "timecode": tc,
+                        "zone_id": cell_id,
+                        "x0": x0, "y0": y0, "x1": x1, "y1": y1,
+                        "cnn_cam_mean": cnn_cell,
+                        "head_delta": drop_cell,
+                        "flow_mag": fmag_cell,
+                        "risk_score": risk
+                    })
+
             if out.isOpened(): out.write(vis)
             prev_pts, prev_count = head_pts, curr_count
 
@@ -631,6 +779,7 @@ def analyze_video(
                 status.write(f"Processed {processed}/{total_steps} sampled frames…")
         f += 1
 
+    # close open event at EOF
     if in_event and start_f is not None:
         end_t = (f-1) / fps
         events_rows.append((start_f, f-1, start_t, end_t,
@@ -645,6 +794,13 @@ def analyze_video(
     prog.progress(1.0); status.write("Done.")
     df_frames = pd.DataFrame(frames_rows[1:], columns=frames_rows[0])
     df_events = pd.DataFrame(events_rows[1:], columns=events_rows[0])
+
+    # Build events_zones DataFrame for download (if any)
+    df_events_zones = pd.DataFrame(events_z_rows) if events_z_rows else pd.DataFrame(
+        columns=["event_id","frame","timecode","zone_id","x0","y0","x1","y1",
+                 "cnn_cam_mean","head_delta","flow_mag","risk_score"]
+    )
+    st.session_state["video_xai"] = {"events_zones": df_events_zones}
     return df_frames, df_events, playable_path
 
 # =============================================================================
