@@ -358,31 +358,63 @@ def transcode_to_h264(src_path: str, dst_path: str, fps: float):
     ok = (proc.returncode == 0) and os.path.exists(dst_path) and os.path.getsize(dst_path) > 0
     return (dst_path if ok else src_path), ok, (proc.stderr or "")
 
-# ========================== XAI: Grad-CAM + Grid helpers ==========================
+# ========================== XAI: Robust Grad-CAM + Grid helpers ==========================
 def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
     """
-    Returns small CAM in [0,1]. If conv_layer_name is None, picks the last Conv2D layer.
-    Works with TensorFlow/Keras 2.20+; imports TF locally to avoid heavy top-level import.
+    Robust Grad-CAM for Keras 3 / TF 2.20:
+    - If conv_layer_name is given, use it (only if rank-4 output is accessible).
+    - Else, auto-pick the LAST layer whose output is rank-4 (feature map).
+    - If no suitable layer is found or gradients fail, return None.
     """
     import tensorflow as tf
-    # pick last conv if unspecified
-    if conv_layer_name is None:
-        conv_layers = [l for l in model.layers if isinstance(l, tf.keras.layers.Conv2D)]
-        if not conv_layers:
-            return None
-        conv_layer = conv_layers[-1]
-    else:
-        conv_layer = model.get_layer(conv_layer_name)
 
-    grad_model = tf.keras.Model([model.inputs], [conv_layer.output, model.output])
+    # Try the user-specified layer first
+    target_layer = None
+    if conv_layer_name is not None:
+        try:
+            L = model.get_layer(conv_layer_name)
+            _ = L.output  # may raise if layer isn't connected
+            if len(_.shape) == 4:
+                target_layer = L
+        except Exception:
+            target_layer = None
+
+    # Auto-pick: last layer with rank-4 output
+    if target_layer is None:
+        for L in reversed(model.layers):
+            try:
+                out = L.output
+                if hasattr(out, "shape") and len(out.shape) == 4:
+                    target_layer = L
+                    break
+            except Exception:
+                continue
+
+    if target_layer is None:
+        return None  # no usable feature map
+
+    # Build a gradient model safely (inputs/outputs API variation)
+    try:
+        grad_model = tf.keras.Model(inputs=model.input,
+                                    outputs=[target_layer.output, model.output])
+    except Exception:
+        grad_model = tf.keras.Model(inputs=model.inputs,
+                                    outputs=[target_layer.output, model.outputs])
+
     with tf.GradientTape() as tape:
         conv_out, preds = grad_model(x_100x100x1, training=False)
-        score = preds[:, 0]  # binary: positive class score
-    grads = tape.gradient(score, conv_out)                      # (1,h,w,c)
-    weights = tf.reduce_mean(grads, axis=(1, 2), keepdims=True) # (1,1,1,c)
-    cam = tf.nn.relu(tf.reduce_sum(weights * conv_out, axis=-1))# (1,h,w)
+        # Binary classifier: take score for positive class (adjust if needed)
+        score = preds[:, 0]
+
+    grads = tape.gradient(score, conv_out)
+    if grads is None:
+        return None
+
+    weights = tf.reduce_mean(grads, axis=(1, 2), keepdims=True)   # (1,1,1,c)
+    cam = tf.nn.relu(tf.reduce_sum(weights * conv_out, axis=-1))  # (1,h,w)
     cam = cam[0].numpy()
-    cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
+    denom = (cam.max() - cam.min())
+    cam = (cam - cam.min()) / (denom + 1e-8)
     return cam
 
 def upscale_cam(cam_small, W, H):
@@ -682,7 +714,7 @@ def analyze_video(
             zone_scores = None
             scores_flat = []
             if XAI_ENABLED and final_label == 1:
-                # 1) Grad-CAM
+                # 1) Robust Grad-CAM (graceful if unavailable)
                 cam_small = gradcam_heatmap(model, x)
                 cam_up = upscale_cam(cam_small, W, H) if cam_small is not None else None
 
@@ -711,7 +743,7 @@ def analyze_video(
                 # 4) Aggregate per-cell risk
                 zone_scores = []
                 for ((x0,y0,x1,y1), cell_id) in grid_boxes:
-                    # CNN CAM mean
+                    # CNN CAM mean (0 if CAM is unavailable)
                     cnn_cell = float(cam_up[y0:y1, x0:x1].mean()) if cam_up is not None else 0.0
                     # Positive head drop only; index via cell coords
                     r_idx = min(GRID_ROWS-1, max(0, y0 // max(1, cell_h)))
