@@ -47,7 +47,7 @@ TARGET_FPS    = None  # None = use every frame
 # ---------- Stampede (running-panic) thresholds ----------
 STAMP_BASELINE_SEC   = 5.0   # learn speed baseline for first ~5s
 FLOW_MEAN_Z          = 1.0   # mean speed >= baseline + Z*std
-FLOW_P95_MIN         = 3.0   # absolute 95th-pct speed gate (px/frame)
+FLOW_P95_MIN         = 3.0   # absolute 95th-pct speed gate (px/frame, @ full-res)
 FLOW_FAST_FRAC_MIN   = 0.25  # ≥25% pixels moving faster than baseline
 FLOW_COH_MIN         = 0.55  # flow direction alignment (0..1)
 FLOW_DIV_MIN         = 0.04  # outward divergence threshold
@@ -74,6 +74,11 @@ W_HEADDOWN, W_FLOW, W_CAM = 0.70, 0.20, 0.10
 # Ancillary cues
 FLOW_ENABLED  = True           # include optical flow
 SNAPSHOT_ONLY = True           # only save one red-marked frame per event; no full overlay video
+
+# Performance controls (avoid silent restarts on small machines)
+FLOW_MAX_SIDE = 640           # compute flow on downscaled frames with max side=640, then upsample metrics
+EVENT_ZONE_LOG_PER_SEC = 1    # log ~once/sec while positive (reduces huge CSVs)
+EVENT_ZONE_MAX_ROWS    = 10000# soft cap on XAI zone rows kept in memory
 
 # ---------- Model location ----------
 APP_DIR = Path(__file__).resolve().parent
@@ -391,7 +396,6 @@ def transcode_to_h264(src_path: str, dst_path: str, fps: float):
 # =============== XAI: Grad-CAM + zone grid helpers ===========================
 def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
     import tensorflow as tf
-
     def _select_score_vector(preds_any):
         t = preds_any
         if isinstance(t, dict): t = t[sorted(t.keys())[0]]
@@ -515,9 +519,10 @@ if load_err:
     st.caption(load_err)
 
 # =============================================================================
-# Re-render persisted results
+# Render (unique keys via key_seed to avoid duplicate widget IDs)
 # =============================================================================
-def render_results(df_frames, df_events, labeled_path):
+def render_results(df_frames, df_events, labeled_path, key_seed=None):
+    key_seed = str(key_seed if key_seed is not None else int(time.time()*1e6))
     st.markdown('<h2 class="cg-h2">Results</h2>', unsafe_allow_html=True)
 
     # KPIs
@@ -576,7 +581,7 @@ def render_results(df_frames, df_events, labeled_path):
     )
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Charts (existing)
+    # Charts
     if not df_frames.empty:
         base = alt.Chart(df_frames).properties(height=240)
         left, right = st.columns(2)
@@ -598,7 +603,6 @@ def render_results(df_frames, df_events, labeled_path):
             )
             st.altair_chart(line_head.interactive(), use_container_width=True)
 
-        # NEW tiny charts for flow metrics
         left2, right2 = st.columns(2)
         with left2:
             st.subheader("Flow Speed (mean & p95)")
@@ -620,17 +624,8 @@ def render_results(df_frames, df_events, labeled_path):
             )
             st.altair_chart(line_coh.interactive(), use_container_width=True)
 
-    # Tables + downloads
-    if not df_events.empty:
-        st.subheader("Detected intervals")
-        st.dataframe(df_events, use_container_width=True)
-    else:
-        st.info("No stampede intervals found.")
-
-    st.subheader("Per-frame predictions")
-    st.dataframe(df_frames.head(1000), use_container_width=True)
-
-    uid = os.path.splitext(os.path.basename(labeled_path or "na.mp4"))[0] if labeled_path else "na"
+    # Tables + downloads (unique widget keys)
+    uid = f"{(os.path.splitext(os.path.basename(labeled_path or 'na.mp4'))[0] if labeled_path else 'na')}_{key_seed}"
     c1, c2, c3 = st.columns(3)
     with c1:
         st.download_button("⬇️ events.csv", df_events.to_csv(index=False).encode("utf-8"),
@@ -655,7 +650,7 @@ def render_results(df_frames, df_events, labeled_path):
     if snapshots:
         st.markdown('<h2 class="cg-h2">Event Snapshots (red-marked zone)</h2>', unsafe_allow_html=True)
         snap_rows = []
-        for s in snapshots:
+        for idx, s in enumerate(snapshots):
             path = s.get("path") or ""
             risk = float(s.get("risk_score", 0.0)) if s.get("risk_score", None) is not None else 0.0
             caption = f"Event {s.get('event_id','?')} • frame {s.get('frame_index','?')} • {s.get('timecode','?')} • {s.get('zone_id','?')} (risk {risk:.2f})"
@@ -664,14 +659,15 @@ def render_results(df_frames, df_events, labeled_path):
                 with col1:
                     ok = _show_image_resilient(path, caption)
                     if not ok:
-                        st.warning(f"Snapshot could not be displayed (event {s.get('event_id','?')}).")
+                        st.warning(f"Snapshot could not be displayed (event {s.get('event_id','?')}).", icon="⚠️")
                 with col2:
                     with open(path, "rb") as fh:
                         st.download_button("⬇️ Download snapshot", fh.read(),
                                            file_name=os.path.basename(path),
-                                           mime="image/jpeg", use_container_width=True)
+                                           mime="image/jpeg", use_container_width=True,
+                                           key=f"dl_snap_{uid}_{idx}")
             else:
-                st.warning(f"Snapshot file missing for event {s.get('event_id','?')} (path: {path})")
+                st.warning(f"Snapshot file missing for event {s.get('event_id','?')} (path: {path})", icon="⚠️")
             snap_rows.append({
                 "event_id": s.get("event_id"),
                 "frame_index": s.get("frame_index"),
@@ -684,15 +680,16 @@ def render_results(df_frames, df_events, labeled_path):
         st.download_button("⬇️ event_snapshots.csv",
                            df_snaps.to_csv(index=False).encode("utf-8"),
                            file_name="event_snapshots.csv", mime="text/csv",
-                           use_container_width=True)
+                           use_container_width=True, key=f"dl_snaps_csv_{uid}")
 
     st.markdown('<h2 class="cg-h2">Labeled Video Preview</h2>', unsafe_allow_html=True)
     st.info("Preview unavailable.")
 
-# Persisted rerender
+# Persisted rerender with stable nonce
+st.session_state.setdefault("render_nonce", 0)
 if "video_results" in st.session_state:
     _res = st.session_state["video_results"]
-    render_results(_res["df_frames"], _res["df_events"], _res.get("labeled_path"))
+    render_results(_res["df_frames"], _res["df_events"], _res.get("labeled_path"), key_seed=f"persist_{st.session_state['render_nonce']}")
 
 # =============================================================================
 # Upload
@@ -781,7 +778,17 @@ def analyze_video(
     # stampede flow baseline state
     eff_fps = (fps / step) if step > 0 else fps
     flow_baseline = _FlowBaseline(eff_fps, base_sec=STAMP_BASELINE_SEC)
-    prev_gray_for_metrics = None  # for stampede flow metrics
+    prev_gray_for_metrics_small = None  # for stampede flow metrics (downscaled)
+    prev_gray_for_flow_small    = None  # for torso/head downflow (downscaled)
+
+    # downscale shape for flow
+    if max(W, H) > FLOW_MAX_SIDE:
+        scale = FLOW_MAX_SIDE / float(max(W, H))
+    else:
+        scale = 1.0
+    w_s = max(8, int(round(W * scale)))
+    h_s = max(8, int(round(H * scale)))
+    abs_p95_min_scaled = FLOW_P95_MIN * scale  # keep absolute gate consistent across scales
 
     frames_rows = [(
         "frame_index","time_sec","timecode",
@@ -793,7 +800,8 @@ def analyze_video(
     )]
     events_rows = [("start_frame","end_frame","start_time_sec","end_time_sec","start_tc","end_tc","duration_sec")]
 
-    out_dir = os.path.join(os.getcwd(), "outputs")
+    # outputs live in temp (avoid file-watchers)
+    out_dir = os.path.join(tempfile.gettempdir(), "cg_outputs")
     os.makedirs(out_dir, exist_ok=True)
     base  = os.path.splitext(os.path.basename(video_path))[0]
     stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -806,15 +814,18 @@ def analyze_video(
 
     # XAI state
     grid_boxes, cell_w, cell_h = make_grid(W, H, rows=GRID_ROWS, cols=GRID_COLS)
-    prev_gray_for_flow = None
     events_z_rows = []
     snapshots = []
     current_best = None
 
-    # NEW: track heads over time for head-down
+    # Track heads over time for head-down
     tracks = []
     window_frames = max(1, int(round(HEAD_DOWN_WINDOW_SEC * (fps/step))))
     streak_frames = max(2, int(round(HEAD_DOWN_MIN_STREAK_SEC * (fps/step))))
+
+    # Throttle zone logging to ~ once per second
+    log_every_n = max(1, int(round((fps / step) / max(0.1, EVENT_ZONE_LOG_PER_SEC))))
+    pos_frame_counter = 0
 
     prog = st.progress(0.0); status = st.empty()
     processed = 0; total_steps = (N // step + 1) if N > 0 else 0
@@ -855,16 +866,20 @@ def analyze_video(
         ok, frame_bgr = cap.read()
         if not ok: break
         if f % step == 0:
-            gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-            gray = np.ascontiguousarray(gray, dtype=np.uint8)
+            gray_full = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+            gray_full = np.ascontiguousarray(gray_full, dtype=np.uint8)
+            if scale != 1.0:
+                gray_small = cv2.resize(gray_full, (w_s, h_s), interpolation=cv2.INTER_AREA)
+            else:
+                gray_small = gray_full
 
-            # --- STAMPEDE (running-panic) METRICS via full optical flow ---
+            # --- STAMPEDE (running-panic) METRICS via full optical flow (downscaled) ---
             flow_mean = flow_p95 = flow_coh = flow_div_out = flow_fast_frac = 0.0
             stampede_label = 0
-            if prev_gray_for_metrics is not None and prev_gray_for_metrics.shape == gray.shape:
+            if prev_gray_for_metrics_small is not None and prev_gray_for_metrics_small.shape == gray_small.shape:
                 try:
                     flow_full = cv2.calcOpticalFlowFarneback(
-                        prev_gray_for_metrics, gray, None,
+                        prev_gray_for_metrics_small, gray_small, None,
                         0.5, 3, 15, 3, 5, 1.2, 0
                     )
                     fx = flow_full[..., 0].astype(np.float32)
@@ -880,11 +895,11 @@ def analyze_video(
                     s = float(np.average(np.sin(ang), weights=w))
                     flow_coh = float(np.sqrt(c*c + s*s))
 
-                    # Outward divergence (expansion); average of positive divergence over moving areas
+                    # Outward divergence
                     du_dx = cv2.Sobel(fx, cv2.CV_32F, 1, 0, ksize=3)
                     dv_dy = cv2.Sobel(fy, cv2.CV_32F, 0, 1, ksize=3)
                     div   = du_dx + dv_dy
-                    move_mask = (mag > max(0.5, flow_baseline.mean)).astype(np.float32)  # ignore near-static
+                    move_mask = (mag > max(0.5*scale, flow_baseline.mean)).astype(np.float32)
                     flow_div_out = float(np.sum(np.maximum(div, 0.0) * move_mask) / (np.sum(move_mask) + 1e-6))
 
                     # Baseline-relative fast fraction
@@ -895,18 +910,18 @@ def analyze_video(
 
                     # Stampede rule: speed + (alignment OR outward burst)
                     cond_speed   = (flow_baseline.ready and flow_fast_frac >= FLOW_FAST_FRAC_MIN) \
-                                   or (flow_p95 >= FLOW_P95_MIN) \
+                                   or (flow_p95 >= abs_p95_min_scaled) \
                                    or (flow_mean >= (flow_baseline.mean + FLOW_MEAN_Z*flow_baseline.std))
                     cond_pattern = (flow_coh >= FLOW_COH_MIN) or (flow_div_out >= FLOW_DIV_MIN)
                     stampede_label = 1 if (cond_speed and cond_pattern) else 0
                 except cv2.error:
                     pass
-            prev_gray_for_metrics = gray.copy()
+            prev_gray_for_metrics_small = gray_small.copy()
 
             # --- Heads detection & tracking for crush/surge (collapse) ---
-            head_pts, head_radii = detect_heads_gray(gray, detector)
+            head_pts, head_radii = detect_heads_gray(gray_full, detector)
             curr_count = len(head_pts)
-            tracks = update_tracks(tracks, head_pts, head_radii, max_match_dist, window_frames)
+            tracks = update_tracks(tracks, head_pts, head_radii, max(15, int(0.03 * max(W, H))), window_frames)
 
             # legacy global deltas for interval logic
             if prev_count is None:
@@ -917,7 +932,7 @@ def analyze_video(
                 y_heads = 1 if (delta >= ABS_DROP or r >= REL_DROP) else 0
 
             # CNN
-            x = preprocess_for_cnn(gray)
+            x = preprocess_for_cnn(gray_full)
             p_cnn = float(model.predict(x, verbose=0)[0][0])
             y_cnn = 1 if p_cnn >= cnn_threshold else 0
 
@@ -947,41 +962,37 @@ def analyze_video(
                 in_event, start_f, start_t = True, f, t
                 event_id += 1
                 current_best = None
+                pos_frame_counter = 0
             elif final_label == 0 and in_event:
                 dur_frames = (f - start_f) // step
                 if dur_frames >= min_event_frames:
                     end_t = (f-1) / fps
                     events_rows.append((start_f, f-1, start_t, end_t,
                                         sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
-                    # save best snapshot of the event
                     if current_best: save_current_best()
                 in_event, start_f, start_t = False, None, None
 
             # -------------------- XAI computations (positive frames) --------------------
             if XAI_ENABLED and final_label == 1:
-                # Grad-CAM (optional / tie-breaker)
-                cam_small = gradcam_heatmap(model, x)
-                cam_up = upscale_cam(cam_small, W, H) if cam_small is not None else None
-
-                # Downward optical flow (torso confirms body follows head)
-                if FLOW_ENABLED:
-                    if prev_gray_for_flow is None or prev_gray_for_flow.shape != gray.shape:
-                        down_mag = np.zeros((H, W), dtype=np.float32)
-                    else:
-                        try:
-                            flow = cv2.calcOpticalFlowFarneback(
-                                prev_gray_for_flow, gray, None,
-                                0.5, 3, 15, 3, 5, 1.2, 0
-                            )
-                            vy = flow[..., 1]
-                            down_mag = np.maximum(vy, 0.0).astype(np.float32)
-                        except cv2.error:
-                            down_mag = np.zeros((H, W), dtype=np.float32)
-                    prev_gray_for_flow = gray.copy()
+                # Downward optical flow (torso confirms body follows head) — compute on small, upsample
+                if prev_gray_for_flow_small is None or prev_gray_for_flow_small.shape != gray_small.shape:
+                    down_mag_full = np.zeros((H, W), dtype=np.float32)
                 else:
-                    down_mag = np.zeros((H, W), dtype=np.float32)
+                    try:
+                        flow = cv2.calcOpticalFlowFarneback(
+                            prev_gray_for_flow_small, gray_small, None,
+                            0.5, 3, 15, 3, 5, 1.2, 0
+                        )
+                        vy_small = np.maximum(flow[..., 1], 0.0).astype(np.float32)
+                        if scale != 1.0:
+                            down_mag_full = cv2.resize(vy_small, (W, H), interpolation=cv2.INTER_CUBIC)
+                        else:
+                            down_mag_full = vy_small
+                    except cv2.error:
+                        down_mag_full = np.zeros((H, W), dtype=np.float32)
+                prev_gray_for_flow_small = gray_small.copy()
 
-                scene_mean_flow = float(down_mag.mean()) + 1e-6
+                scene_mean_flow = float(down_mag_full.mean()) + 1e-6
 
                 # Grid (rows x cols)
                 grid_boxes, cell_w, cell_h = make_grid(W, H, rows=GRID_ROWS, cols=GRID_COLS)
@@ -1000,6 +1011,7 @@ def analyze_video(
                     r = min(GRID_ROWS-1, max(0, int(y // max(1, cell_h))))
                     return r*GRID_COLS + c
 
+                # neighbor median helper
                 def neighbors_y_median(x, y, r_head):
                     ys = []
                     for t2 in tracks:
@@ -1017,6 +1029,7 @@ def analyze_video(
                     ci = cell_index_for(xh, yh)
                     cell_records[ci]["heads"] += 1
 
+                # compute per-track drop and add candidates
                 for tinfo in tracks:
                     (xh, yh) = tinfo["pos"]; rhead = max(2.0, tinfo.get("r", 6.0))
                     if len(tinfo["hist"]) < (window_frames + 1):
@@ -1031,14 +1044,14 @@ def analyze_video(
                     y_med = neighbors_y_median(xh, yh, rhead)
                     rel_drop_rad = (yh - y_med) / rhead  # >0 if lower than neighbors
 
-                    # torso vs head downflow
+                    # torso vs head downflow (use upsampled down_mag_full)
                     x0r = int(max(0, xh - 1.2*rhead)); x1r = int(min(W, xh + 1.2*rhead))
                     yh0 = int(max(0, yh - 1.0*rhead)); yh1 = int(min(H, yh + 0.5*rhead))  # head band
                     yt0 = int(max(0, yh + 0.5*rhead)); yt1 = int(min(H, yh + 3.0*rhead))  # torso band
-                    torso_flow = float(down_mag[yt0:yt1, x0r:x1r].mean()) if yt1>yt0 else 0.0
-                    head_flow  = float(down_mag[yh0:yh1, x0r:x1r].mean()) if yh1>yh0 else 0.0
+                    torso_flow = float(down_mag_full[yt0:yt1, x0r:x1r].mean()) if yt1>yt0 else 0.0
+                    head_flow  = float(down_mag_full[yh0:yh1, x0r:x1r].mean()) if yh1>yh0 else 0.0
                     torso_ratio = (torso_flow + 1e-6) / (head_flow + 1e-6)
-                    torso_scene = (torso_flow + 1e-6) / scene_mean_flow
+                    torso_scene = (torso_flow + 1e-6) / (scene_mean_flow)
 
                     # gates
                     cond_drop = (dy_norm_abs >= HEAD_DOWN_MIN_DY_FRAC) or (dy >= HEAD_DOWN_MIN_DY_RAD * rhead)
@@ -1058,7 +1071,8 @@ def analyze_video(
                         rec["max_dy_norm"] = max(rec["max_dy_norm"], dy_norm_abs)
                         rec["torso_flow_accum"] += torso_scene
 
-                # per-cell CAM and final risk
+                # per-cell Grad-CAM (optional)
+                cam_up = upscale_cam(gradcam_heatmap(model, x), W, H) if XAI_ENABLED else None
                 for rec in cell_records:
                     (x0c,y0c,x1c,y1c) = (rec["x0"], rec["y0"], rec["x1"], rec["y1"])
                     rec["cnn_cell"] = float(cam_up[y0c:y1c, x0c:x1c].mean()) if cam_up is not None else 0.0
@@ -1067,18 +1081,17 @@ def analyze_video(
                     down_in_cell  = rec["cand"]
                     frac_down     = float(down_in_cell) / float(heads_in_cell)
 
-                    # Mass-movement penalty only if nearly everyone drops together
                     penalty = 0.0
                     if frac_down > MASS_DROP_PENALTY_START:
-                        scale = min(1.0, (frac_down - MASS_DROP_PENALTY_START) / (1.0 - MASS_DROP_PENALTY_START))
-                        penalty = MASS_DROP_PENALTY_STRENGTH * scale
+                        scale_p = min(1.0, (frac_down - MASS_DROP_PENALTY_START) / (1.0 - MASS_DROP_PENALTY_START))
+                        penalty = MASS_DROP_PENALTY_STRENGTH * scale_p
 
                     hd_score = (down_in_cell + rec["sum_dy_norm"] + 0.5*rec["max_dy_norm"])
                     flow_norm = (rec["torso_flow_accum"] / max(1, down_in_cell)) if down_in_cell>0 else 0.0
                     risk_raw = (W_HEADDOWN * hd_score) + (W_FLOW * flow_norm) + (W_CAM * rec["cnn_cell"])
                     rec["risk"] = risk_raw * (1.0 - penalty)
 
-                # prefer cells with actual candidates
+                # choose best cell
                 cands = [i for i,rc in enumerate(cell_records) if rc["cand"] > 0]
                 best_i = max(cands, key=lambda i: cell_records[i]["risk"]) if cands else \
                          max(range(len(cell_records)), key=lambda i: cell_records[i]["risk"])
@@ -1097,25 +1110,33 @@ def analyze_video(
                         "risk_score": best_risk
                     }
 
-                # logging
-                for rc in cell_records:
-                    events_z_rows.append({
-                        "event_id": event_id, "frame": f, "timecode": tc, "zone_id": rc["cell_id"],
-                        "x0": rc["x0"], "y0": rc["y0"], "x1": rc["x1"], "y1": rc["y1"],
-                        "risk_score": rc["risk"],
-                        "cand": rc["cand"],
-                        "sum_dy_norm": rc["sum_dy_norm"],
-                        "max_dy_norm": rc["max_dy_norm"],
-                        "heads_in_cell": rc["heads"],
-                        "cnn_cell": rc["cnn_cell"],
-                    })
+                # throttled logging (~1 row/sec per cell set)
+                pos_frame_counter += 1
+                if (pos_frame_counter % log_every_n) == 0:
+                    for rc in cell_records:
+                        events_z_rows.append({
+                            "event_id": event_id, "frame": f, "timecode": tc, "zone_id": rc["cell_id"],
+                            "x0": rc["x0"], "y0": rc["y0"], "x1": rc["x1"], "y1": rc["y1"],
+                            "risk_score": rc["risk"],
+                            "cand": rc["cand"],
+                            "sum_dy_norm": rc["sum_dy_norm"],
+                            "max_dy_norm": rc["max_dy_norm"],
+                            "heads_in_cell": rc["heads"],
+                            "cnn_cell": rc["cnn_cell"],
+                        })
+                    # soft cap to avoid OOM
+                    if len(events_z_rows) > EVENT_ZONE_MAX_ROWS:
+                        # drop oldest 20% to free memory
+                        drop_n = len(events_z_rows) // 5
+                        events_z_rows = events_z_rows[drop_n:]
 
             prev_pts, prev_count = head_pts, curr_count
 
             processed += 1
             if total_steps:
-                prog.progress(min(1.0, processed/total_steps))
-                status.write(f"Processed {processed}/{total_steps} sampled frames…")
+                if processed % 5 == 0 or processed == total_steps:
+                    prog.progress(min(1.0, processed/total_steps))
+                    status.write(f"Processed {processed}/{total_steps} sampled frames…")
         f += 1
 
     # close final event
@@ -1160,4 +1181,6 @@ if go:
             "labeled_path": labeled_path,
         }
         st.session_state["detection_mode_label"] = detection_mode
-        render_results(df_frames, df_events, labeled_path)
+        # bump render nonce so this render gets unique widget keys
+        st.session_state["render_nonce"] = st.session_state.get("render_nonce", 0) + 1
+        render_results(df_frames, df_events, labeled_path, key_seed=f"new_{st.session_state['render_nonce']}")
