@@ -43,7 +43,7 @@ CNN_THRESHOLD = 0.65   # was 0.50
 
 ABS_DROP      = 2
 REL_DROP      = 0.20
-MIN_EVENT_SEC = 1.0
+MIN_EVENT_SEC = 1.5     # was 1.0 → avoid blink events
 COMBINE_RULE  = "and"
 MIN_FRAC      = 0.00005
 MAX_FRAC      = 0.0020
@@ -68,19 +68,24 @@ GRID_COLS     = 6
 # Head+Torso collapse detector (primary signal)
 # Tightened to ignore phone-looking head tilts
 HEAD_DOWN_WINDOW_SEC      = 0.8
-HEAD_DOWN_MIN_DY_FRAC     = 0.04  # was 0.02
-HEAD_DOWN_MIN_DY_RAD      = 1.0   # was 0.8
-HEAD_DOWN_MIN_STREAK_SEC  = 0.60  # was 0.35
+HEAD_DOWN_MIN_DY_FRAC     = 0.06  # was 0.02
+HEAD_DOWN_MIN_DY_RAD      = 1.20  # was 0.8
+HEAD_DOWN_MIN_STREAK_SEC  = 0.80  # was 0.35
 NEIGH_RADIUS_MULT         = 3.0
-NEIGH_REL_MIN_RAD         = 1.0   # was 0.6
+NEIGH_REL_MIN_RAD         = 1.20  # was 0.6
 MASS_DROP_PENALTY_START   = 0.88  # was 0.80
 MASS_DROP_PENALTY_STRENGTH= 0.25  # was 0.30
 
 # Torso motion requirements (both head AND torso must go down together)
-TORSO_RATIO_MIN = 1.40   # torso must move more than head region
-TORSO_SCENE_MIN = 1.30   # torso motion must exceed scene average
+TORSO_RATIO_MIN = 1.50   # torso must move more than head region
+TORSO_SCENE_MIN = 1.40   # torso motion must exceed scene average
 
-# Quiet-scene suppression: kills "standing + phone" false positives
+# Require at least N people showing head+torso down together
+HT_MIN_CAND        = 3     # try 3–5 depending on crowd size
+FLOW_MIN_FAST_FRAC = 0.12  # ≥12% of pixels faster than baseline
+FLOW_MIN_COH       = 0.50  # flow must be somewhat coherent
+
+# Quiet-scene suppression (extra guard)
 QUIET_SCENE_SUPPRESS = True
 QUIET_P95_MAX        = 1.20
 QUIET_FAST_FRAC_MAX  = 0.08
@@ -94,10 +99,10 @@ FLOW_ENABLED  = True
 SNAPSHOT_ONLY = True
 
 # ---------- Snapshot overlay control ----------
-# Remove the red marked zone / label on saved snapshots
-SHOW_ZONE_BOX = False   # set True to draw the red box + caption again
+# Red box & caption **removed** in code (no draw), this stays for compatibility only
+SHOW_ZONE_BOX = False
 
-# When True: "for stampede to occur whole head and body must go down together"
+# Enforce: for stampede to occur whole head and body must go down together
 STRICT_REQUIRE_HEAD_AND_TORSO = True
 
 # ---------- Model location ----------
@@ -694,7 +699,7 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
 
     snapshots = extra.get("snapshots", [])
     if snapshots:
-        st.markdown('<h2 class="cg-h2">Event Snapshots (red-marked zone)</h2>', unsafe_allow_html=True)
+        st.markdown('<h2 class="cg-h2">Event Snapshots</h2>', unsafe_allow_html=True)  # removed "(red-marked zone)"
         snap_rows = []
         for s in snapshots:
             path = s.get("path") or ""
@@ -854,24 +859,15 @@ def analyze_video(
     prog = st.progress(0.0); status = st.empty()
     processed = 0; total_steps = (N // step + 1) if N > 0 else 0
 
-    # helper to save the best snapshot per event
+    # helper to save the best snapshot per event — NO drawing overlays
     def save_current_best():
         nonlocal current_best, snapshots
         if not current_best: return
         frame = current_best.pop("frame", None)
         if frame is None:
             current_best = None; return
-        x0,y0,x1,y1 = current_best["x0"], current_best["y0"], current_best["x1"], current_best["y1"]
 
-        # draw overlay only if enabled
-        if SHOW_ZONE_BOX:
-            cv2.rectangle(frame, (x0,y0), (x1,y1), (0,0,255), 3)
-            label = (
-                f"Event {current_best['event_id']} • {current_best['timecode']} • "
-                f"{current_best['zone_id']} • risk {float(current_best['risk_score']):.2f}"
-            )
-            cv2.putText(frame, label, (max(6,x0), max(24,y0-6)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2, cv2.LINE_AA)
+        x0,y0,x1,y1 = current_best["x0"], current_best["y0"], current_best["x1"], current_best["y1"]
 
         snap_path = os.path.join(out_dir, f"{base}_{stamp}_event{current_best['event_id']}_snapshot.jpg")
         ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
@@ -961,8 +957,8 @@ def analyze_video(
             final_stamp = combine_labels(stampede_label, y_cnn, COMBINE_RULE)
 
             # -------------------- XAI computations (positive frames) --------------------
-            # We'll compute a stronger "heads_torso_label" that explicitly requires TORso going down with the head.
             any_head_and_torso_down = False
+            ht_cand_count = 0
 
             if XAI_ENABLED:
                 cam_small = gradcam_heatmap(model, x)
@@ -986,7 +982,6 @@ def analyze_video(
                     down_mag = np.zeros((H, W), dtype=np.float32)
 
                 scene_mean_flow = float(down_mag.mean()) + 1e-6
-
                 grid_boxes, cell_w, cell_h = make_grid(W, H, rows=GRID_ROWS, cols=GRID_COLS)
 
                 cell_records = []
@@ -1052,6 +1047,7 @@ def analyze_video(
 
                     if tinfo["down_streak"] >= streak_frames:
                         any_head_and_torso_down = True
+                        ht_cand_count += 1
                         ci = cell_index_for(xh, yh)
                         rec = cell_records[ci]
                         rec["cand"] += 1
@@ -1108,29 +1104,26 @@ def analyze_video(
                         "cnn_cell": rc["cnn_cell"],
                     })
 
-            # heads_torso_label captures the strict requirement: head AND torso down together
+            # heads_torso_label captures strict requirement: head AND torso down together
             heads_torso_label = 1 if any_head_and_torso_down else 0
 
             # ---------- FINAL LABEL LOGIC ----------
-            # By request: a stampede requires both head and body going down together.
-            # So we require: heads_torso_label == 1 AND CNN == 1.
-            strict_crush = 1 if (heads_torso_label == 1 and y_cnn == 1) else 0
+            # Demand crowd motion AND multiple head+torso candidates AND CNN agreement
+            motion_ok = (flow_fast_frac >= FLOW_MIN_FAST_FRAC) and (flow_coh >= FLOW_MIN_COH)
+            strict_crush = 1 if (ht_cand_count >= HT_MIN_CAND and y_cnn == 1 and motion_ok) else 0
 
             mode = (detection_mode or "Hybrid").lower()
             if "stampede" in mode:
-                # If user explicitly chooses running panic mode, keep original flow+cnn path,
-                # but still apply quiet-scene veto below.
-                final_label = final_stamp
+                final_label = final_stamp   # running panic path (flow signature)
             elif "crush" in mode or "surge" in mode:
                 final_label = strict_crush
             else:
-                # Hybrid: allow either running-panic OR strict crush
+                # Hybrid: either clear running panic OR strict crush
                 final_label = 1 if (final_stamp == 1 or strict_crush == 1) else 0
 
-            # Veto false positives in mostly-still scenes (standing + looking at phones).
+            # Veto weird still scenes if needed
             if QUIET_SCENE_SUPPRESS and final_label == 1:
                 quiet_scene = (flow_p95 < QUIET_P95_MAX) and (flow_fast_frac < QUIET_FAST_FRAC_MAX) and (flow_coh < QUIET_COH_MAX)
-                # Only veto if it wasn't a clear running-panic signature
                 if quiet_scene and strict_crush == 1 and final_stamp == 0:
                     final_label = 0
 
@@ -1158,8 +1151,6 @@ def analyze_video(
                                         sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
                     if current_best: save_current_best()
                 in_event, start_f, start_t = False, None, None
-
-            prev_pts, prev_count = head_pts, curr_count
 
             processed += 1
             if total_steps:
