@@ -74,7 +74,7 @@ MASS_DROP_PENALTY_START   = 0.80
 MASS_DROP_PENALTY_STRENGTH= 0.30
 
 # risk weights
-W_HEADDOWN, W_FLOW, W_CAM = 0.70, 0.20, 0.10  # W_CAM uses frame p_cnn now (no Grad-CAM)
+W_HEADDOWN, W_FLOW, W_CAM = 0.70, 0.20, 0.10
 
 # Ancillary cues
 FLOW_ENABLED  = True
@@ -189,9 +189,14 @@ st.markdown(
 
 # ---------- safe wrapper for components.html ----------
 def _safe_html(html: str, *, height: int, key: str, scrolling: bool=False, width: int=0):
+    """
+    Render a components.html panel but never crash the app if the frontend
+    doesn't like the message shape (TypeError / Bad message format).
+    """
     try:
         components.html(html, height=height, key=key, scrolling=scrolling, width=width)
     except TypeError:
+        # swallow and continue – background / confetti are non-essential
         pass
     except Exception:
         pass
@@ -401,6 +406,61 @@ def transcode_to_h264(src_path: str, dst_path: str, fps: float):
     proc = subprocess.run(cmd, capture_output=True, text=True)
     ok = (proc.returncode == 0) and os.path.exists(dst_path) and os.path.getsize(dst_path) > 0
     return (dst_path if ok else src_path), ok, (proc.stderr or "")
+
+# =============== XAI: Grad-CAM + zone grid helpers ===========================
+def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
+    import tensorflow as tf
+
+    def _select_score_vector(preds_any):
+        t = preds_any
+        if isinstance(t, dict): t = t[sorted(t.keys())[0]]
+        if isinstance(t, (list, tuple)): t = t[0]
+        t = tf.convert_to_tensor(t)
+        r = t.shape.rank
+        if r is None: return tf.reshape(t, (tf.shape(t)[0], -1))[:, -1]
+        if r == 1:  return t
+        if r == 2:
+            c = t.shape[-1]
+            return tf.squeeze(t, axis=-1) if c == 1 else t[:, -1]
+        return tf.reshape(t, (tf.shape(t)[0], -1))[:, -1]
+
+    # pick last conv
+    target_layer = None
+    if conv_layer_name:
+        try:
+            L = model.get_layer(conv_layer_name)
+            if len(L.output.shape) == 4: target_layer = L
+        except Exception:
+            pass
+    if target_layer is None:
+        for L in reversed(model.layers):
+            try:
+                if len(L.output.shape) == 4:
+                    target_layer = L; break
+            except Exception:
+                continue
+    if target_layer is None: return None
+
+    try:
+        grad_model = tf.keras.Model(inputs=model.input, outputs=[target_layer.output, model.output])
+    except Exception:
+        grad_model = tf.keras.Model(inputs=model.inputs, outputs=[target_layer.output, model.outputs])
+
+    with tf.GradientTape() as tape:
+        conv_out, preds = grad_model(x_100x100x1, training=False)
+        score_vec = _select_score_vector(preds)
+
+    grads = tape.gradient(score_vec, conv_out)
+    if grads is None: return None
+    weights = tf.reduce_mean(grads, axis=(1, 2), keepdims=True)
+    cam = tf.nn.relu(tf.reduce_sum(weights * conv_out, axis=-1))
+    cam = cam[0].numpy()
+    cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
+    return cam
+
+def upscale_cam(cam_small, W, H):
+    if cam_small is None: return None
+    return cv2.resize(cam_small, (W, H), interpolation=cv2.INTER_CUBIC)
 
 def make_grid(W, H, rows=6, cols=6):
     cell_w, cell_h = W // cols, H // rows
@@ -906,9 +966,11 @@ def analyze_video(
                     if current_best: save_current_best()
                 in_event, start_f, start_t = False, None, None
 
-            # -------------------- XAI computations (positive frames; Grad-CAM removed) --------------------
+            # -------------------- XAI computations (positive frames) --------------------
             if XAI_ENABLED and final_label == 1:
-                # Downward optical flow (torso confirms body follows head)
+                cam_small = gradcam_heatmap(model, x)
+                cam_up = upscale_cam(cam_small, W, H) if cam_small is not None else None
+
                 if FLOW_ENABLED:
                     if prev_gray_for_flow is None or prev_gray_for_flow.shape != gray.shape:
                         down_mag = np.zeros((H, W), dtype=np.float32)
@@ -928,10 +990,8 @@ def analyze_video(
 
                 scene_mean_flow = float(down_mag.mean()) + 1e-6
 
-                # Grid (rows x cols)
                 grid_boxes, cell_w, cell_h = make_grid(W, H, rows=GRID_ROWS, cols=GRID_COLS)
 
-                # evaluate per-track collapse, then aggregate to grid cells
                 cell_records = []
                 for ((x0,y0,x1,y1), cid) in grid_boxes:
                     cell_records.append({
@@ -972,20 +1032,17 @@ def analyze_video(
                     dy = (yh - y_then)
                     dy_norm_abs = float(dy) / max(1.0, float(H))
 
-                    # relative to local standing line (neighbors median y)
                     y_med = neighbors_y_median(xh, yh, rhead)
-                    rel_drop_rad = (yh - y_med) / rhead  # >0 if lower than neighbors
+                    rel_drop_rad = (yh - y_med) / rhead
 
-                    # torso vs head downflow
                     x0r = int(max(0, xh - 1.2*rhead)); x1r = int(min(W, xh + 1.2*rhead))
-                    yh0 = int(max(0, yh - 1.0*rhead)); yh1 = int(min(H, yh + 0.5*rhead))  # head band
-                    yt0 = int(max(0, yh + 0.5*rhead)); yt1 = int(min(H, yh + 3.0*rhead))  # torso band
+                    yh0 = int(max(0, yh - 1.0*rhead)); yh1 = int(min(H, yh + 0.5*rhead))
+                    yt0 = int(max(0, yh + 0.5*rhead)); yt1 = int(min(H, yh + 3.0*rhead))
                     torso_flow = float(down_mag[yt0:yt1, x0r:x1r].mean()) if yt1>yt0 else 0.0
                     head_flow  = float(down_mag[yh0:yh1, x0r:x1r].mean()) if yh1>yh0 else 0.0
                     torso_ratio = (torso_flow + 1e-6) / (head_flow + 1e-6)
                     torso_scene = (torso_flow + 1e-6) / scene_mean_flow
 
-                    # gates
                     cond_drop = (dy_norm_abs >= HEAD_DOWN_MIN_DY_FRAC) or (dy >= HEAD_DOWN_MIN_DY_RAD * rhead)
                     cond_rel  = (rel_drop_rad >= NEIGH_REL_MIN_RAD)
                     cond_torso = (torso_ratio >= 1.25) and (torso_scene >= 1.15)
@@ -1003,9 +1060,9 @@ def analyze_video(
                         rec["max_dy_norm"] = max(rec["max_dy_norm"], dy_norm_abs)
                         rec["torso_flow_accum"] += torso_scene
 
-                # per-cell "cnn_cell": use global frame CNN prob (no Grad-CAM)
                 for rec in cell_records:
-                    rec["cnn_cell"] = float(p_cnn)
+                    (x0c,y0c,x1c,y1c) = (rec["x0"], rec["y0"], rec["x1"], rec["y1"])
+                    rec["cnn_cell"] = float(cam_up[y0c:y1c, x0c:x1c].mean()) if cam_up is not None else 0.0
 
                     heads_in_cell = max(1, rec["heads"])
                     down_in_cell  = rec["cand"]
@@ -1021,7 +1078,6 @@ def analyze_video(
                     risk_raw = (W_HEADDOWN * hd_score) + (W_FLOW * flow_norm) + (W_CAM * rec["cnn_cell"])
                     rec["risk"] = risk_raw * (1.0 - penalty)
 
-                # prefer cells with actual candidates
                 cands = [i for i,rc in enumerate(cell_records) if rc["cand"] > 0]
                 best_i = max(cands, key=lambda i: cell_records[i]["risk"]) if cands else \
                          max(range(len(cell_records)), key=lambda i: cell_records[i]["risk"])
@@ -1040,7 +1096,6 @@ def analyze_video(
                         "risk_score": best_risk
                     }
 
-                # logging
                 for rc in cell_records:
                     events_z_rows.append({
                         "event_id": event_id, "frame": f, "timecode": tc, "zone_id": rc["cell_id"],
