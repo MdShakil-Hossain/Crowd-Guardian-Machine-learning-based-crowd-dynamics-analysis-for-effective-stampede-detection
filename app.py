@@ -196,9 +196,9 @@ components.html("""
   addEventListener('resize', resize); resize();
   const N = 120;
   const P = Array.from({length:N}, () => ({
-    x: Math.random()*c.width, y: Math.random()*c.height,
-    vx: -0.25 + Math.random()*0.5, vy: -0.25 + Math.random()*0.5,
-    s: 0.6 + Math.random()*1.6
+     x: Math.random()*c.width, y: Math.random()*c.height,
+     vx: -0.25 + Math.random()*0.5, vy: -0.25 + Math.random()*0.5,
+     s: 0.6 + Math.random()*1.6
   }));
   function tick(){
     ctx.clearRect(0,0,c.width,c.height);
@@ -515,10 +515,9 @@ if load_err:
     st.caption(load_err)
 
 # =============================================================================
-# Re-render persisted results (use unique key seed to avoid duplicate widget IDs)
+# Re-render persisted results
 # =============================================================================
-def render_results(df_frames, df_events, labeled_path, key_seed=None):
-    key_seed = str(key_seed if key_seed is not None else int(time.time()*1e6))
+def render_results(df_frames, df_events, labeled_path):
     st.markdown('<h2 class="cg-h2">Results</h2>', unsafe_allow_html=True)
 
     # KPIs
@@ -577,7 +576,7 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
     )
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Charts (existing + flow)
+    # Charts (existing)
     if not df_frames.empty:
         base = alt.Chart(df_frames).properties(height=240)
         left, right = st.columns(2)
@@ -599,6 +598,7 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
             )
             st.altair_chart(line_head.interactive(), use_container_width=True)
 
+        # NEW tiny charts for flow metrics
         left2, right2 = st.columns(2)
         with left2:
             st.subheader("Flow Speed (mean & p95)")
@@ -630,9 +630,7 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
     st.subheader("Per-frame predictions")
     st.dataframe(df_frames.head(1000), use_container_width=True)
 
-    # ---- Unique widget keys based on key_seed ----
-    uid = f"{(os.path.splitext(os.path.basename(labeled_path or 'na.mp4'))[0] if labeled_path else 'na')}_{key_seed}"
-
+    uid = os.path.splitext(os.path.basename(labeled_path or "na.mp4"))[0] if labeled_path else "na"
     c1, c2, c3 = st.columns(3)
     with c1:
         st.download_button("⬇️ events.csv", df_events.to_csv(index=False).encode("utf-8"),
@@ -657,7 +655,7 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
     if snapshots:
         st.markdown('<h2 class="cg-h2">Event Snapshots (red-marked zone)</h2>', unsafe_allow_html=True)
         snap_rows = []
-        for idx, s in enumerate(snapshots):
+        for s in snapshots:
             path = s.get("path") or ""
             risk = float(s.get("risk_score", 0.0)) if s.get("risk_score", None) is not None else 0.0
             caption = f"Event {s.get('event_id','?')} • frame {s.get('frame_index','?')} • {s.get('timecode','?')} • {s.get('zone_id','?')} (risk {risk:.2f})"
@@ -666,15 +664,14 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
                 with col1:
                     ok = _show_image_resilient(path, caption)
                     if not ok:
-                        st.warning(f"Snapshot could not be displayed (event {s.get('event_id','?')}).", icon="⚠️")
+                        st.warning(f"Snapshot could not be displayed (event {s.get('event_id','?')}).")
                 with col2:
                     with open(path, "rb") as fh:
                         st.download_button("⬇️ Download snapshot", fh.read(),
                                            file_name=os.path.basename(path),
-                                           mime="image/jpeg", use_container_width=True,
-                                           key=f"dl_snap_{uid}_{idx}")
+                                           mime="image/jpeg", use_container_width=True)
             else:
-                st.warning(f"Snapshot file missing for event {s.get('event_id','?')} (path: {path})", icon="⚠️")
+                st.warning(f"Snapshot file missing for event {s.get('event_id','?')} (path: {path})")
             snap_rows.append({
                 "event_id": s.get("event_id"),
                 "frame_index": s.get("frame_index"),
@@ -687,16 +684,15 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
         st.download_button("⬇️ event_snapshots.csv",
                            df_snaps.to_csv(index=False).encode("utf-8"),
                            file_name="event_snapshots.csv", mime="text/csv",
-                           use_container_width=True, key=f"dl_snaps_csv_{uid}")
+                           use_container_width=True)
 
     st.markdown('<h2 class="cg-h2">Labeled Video Preview</h2>', unsafe_allow_html=True)
     st.info("Preview unavailable.")
 
-# If we already have results from a previous run, render them once with a stable nonce
-st.session_state.setdefault("render_nonce", 0)
+# Persisted rerender
 if "video_results" in st.session_state:
     _res = st.session_state["video_results"]
-    render_results(_res["df_frames"], _res["df_events"], _res.get("labeled_path"), key_seed=f"persist_{st.session_state['render_nonce']}")
+    render_results(_res["df_frames"], _res["df_events"], _res.get("labeled_path"))
 
 # =============================================================================
 # Upload
@@ -735,7 +731,8 @@ def update_tracks(tracks, detections, radii, max_dist, window_cap):
     matched_idx = {i for i,_ in matches}
     for k in range(len(tracks)):
         if k in matched_idx:
-            survivors.append(tracks[k]); continue
+            survivors.append(tracks[k])
+            continue
         t = tracks[k]; t["miss"] += 1
         if t["miss"] <= 2:
             survivors.append(t)
@@ -775,7 +772,7 @@ def analyze_video(
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     W   = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     H   = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    N   = int(cv2.CAP_PROP_FRAME_COUNT) or 0
+    N   = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
 
     step = 1 if not target_fps or target_fps <= 0 else max(1, int(round(fps / float(target_fps))))
     max_match_dist = max(15, int(0.03 * max(W, H)))
@@ -814,7 +811,7 @@ def analyze_video(
     snapshots = []
     current_best = None
 
-    # Track heads over time for head-down
+    # NEW: track heads over time for head-down
     tracks = []
     window_frames = max(1, int(round(HEAD_DOWN_WINDOW_SEC * (fps/step))))
     streak_frames = max(2, int(round(HEAD_DOWN_MIN_STREAK_SEC * (fps/step))))
@@ -883,11 +880,11 @@ def analyze_video(
                     s = float(np.average(np.sin(ang), weights=w))
                     flow_coh = float(np.sqrt(c*c + s*s))
 
-                    # Outward divergence
+                    # Outward divergence (expansion); average of positive divergence over moving areas
                     du_dx = cv2.Sobel(fx, cv2.CV_32F, 1, 0, ksize=3)
                     dv_dy = cv2.Sobel(fy, cv2.CV_32F, 0, 1, ksize=3)
                     div   = du_dx + dv_dy
-                    move_mask = (mag > max(0.5, flow_baseline.mean)).astype(np.float32)
+                    move_mask = (mag > max(0.5, flow_baseline.mean)).astype(np.float32)  # ignore near-static
                     flow_div_out = float(np.sum(np.maximum(div, 0.0) * move_mask) / (np.sum(move_mask) + 1e-6))
 
                     # Baseline-relative fast fraction
@@ -956,6 +953,7 @@ def analyze_video(
                     end_t = (f-1) / fps
                     events_rows.append((start_f, f-1, start_t, end_t,
                                         sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
+                    # save best snapshot of the event
                     if current_best: save_current_best()
                 in_event, start_f, start_t = False, None, None
 
@@ -1031,17 +1029,18 @@ def analyze_video(
 
                     # relative to local standing line (neighbors median y)
                     y_med = neighbors_y_median(xh, yh, rhead)
-                    rel_drop_rad = (yh - y_med) / rhead
+                    rel_drop_rad = (yh - y_med) / rhead  # >0 if lower than neighbors
 
                     # torso vs head downflow
                     x0r = int(max(0, xh - 1.2*rhead)); x1r = int(min(W, xh + 1.2*rhead))
-                    yh0 = int(max(0, yh - 1.0*rhead)); yh1 = int(min(H, yh + 0.5*rhead))
-                    yt0 = int(max(0, yh + 0.5*rhead)); yt1 = int(min(H, yh + 3.0*rhead))
+                    yh0 = int(max(0, yh - 1.0*rhead)); yh1 = int(min(H, yh + 0.5*rhead))  # head band
+                    yt0 = int(max(0, yh + 0.5*rhead)); yt1 = int(min(H, yh + 3.0*rhead))  # torso band
                     torso_flow = float(down_mag[yt0:yt1, x0r:x1r].mean()) if yt1>yt0 else 0.0
                     head_flow  = float(down_mag[yh0:yh1, x0r:x1r].mean()) if yh1>yh0 else 0.0
                     torso_ratio = (torso_flow + 1e-6) / (head_flow + 1e-6)
                     torso_scene = (torso_flow + 1e-6) / scene_mean_flow
 
+                    # gates
                     cond_drop = (dy_norm_abs >= HEAD_DOWN_MIN_DY_FRAC) or (dy >= HEAD_DOWN_MIN_DY_RAD * rhead)
                     cond_rel  = (rel_drop_rad >= NEIGH_REL_MIN_RAD)
                     cond_torso = (torso_ratio >= 1.25) and (torso_scene >= 1.15)
@@ -1060,7 +1059,6 @@ def analyze_video(
                         rec["torso_flow_accum"] += torso_scene
 
                 # per-cell CAM and final risk
-                cam_up = upscale_cam(gradcam_heatmap(model, x), W, H) if XAI_ENABLED else None
                 for rec in cell_records:
                     (x0c,y0c,x1c,y1c) = (rec["x0"], rec["y0"], rec["x1"], rec["y1"])
                     rec["cnn_cell"] = float(cam_up[y0c:y1c, x0c:x1c].mean()) if cam_up is not None else 0.0
@@ -1069,6 +1067,7 @@ def analyze_video(
                     down_in_cell  = rec["cand"]
                     frac_down     = float(down_in_cell) / float(heads_in_cell)
 
+                    # Mass-movement penalty only if nearly everyone drops together
                     penalty = 0.0
                     if frac_down > MASS_DROP_PENALTY_START:
                         scale = min(1.0, (frac_down - MASS_DROP_PENALTY_START) / (1.0 - MASS_DROP_PENALTY_START))
@@ -1079,6 +1078,7 @@ def analyze_video(
                     risk_raw = (W_HEADDOWN * hd_score) + (W_FLOW * flow_norm) + (W_CAM * rec["cnn_cell"])
                     rec["risk"] = risk_raw * (1.0 - penalty)
 
+                # prefer cells with actual candidates
                 cands = [i for i,rc in enumerate(cell_records) if rc["cand"] > 0]
                 best_i = max(cands, key=lambda i: cell_records[i]["risk"]) if cands else \
                          max(range(len(cell_records)), key=lambda i: cell_records[i]["risk"])
@@ -1097,6 +1097,7 @@ def analyze_video(
                         "risk_score": best_risk
                     }
 
+                # logging
                 for rc in cell_records:
                     events_z_rows.append({
                         "event_id": event_id, "frame": f, "timecode": tc, "zone_id": rc["cell_id"],
@@ -1117,6 +1118,7 @@ def analyze_video(
                 status.write(f"Processed {processed}/{total_steps} sampled frames…")
         f += 1
 
+    # close final event
     if in_event and start_f is not None:
         end_t = (f-1) / fps
         events_rows.append((start_f, f-1, start_t, end_t,
@@ -1129,6 +1131,7 @@ def analyze_video(
     df_frames = pd.DataFrame(frames_rows[1:], columns=frames_rows[0])
     df_events = pd.DataFrame(events_rows[1:], columns=events_rows[0])
 
+    # zones dataframe for journaling
     df_events_zones = pd.DataFrame(events_z_rows) if events_z_rows else pd.DataFrame(
         columns=["event_id","frame","timecode","zone_id","x0","y0","x1","y1",
                  "risk_score","cand","sum_dy_norm","max_dy_norm","heads_in_cell","cnn_cell"]
@@ -1157,6 +1160,4 @@ if go:
             "labeled_path": labeled_path,
         }
         st.session_state["detection_mode_label"] = detection_mode
-        # bump render nonce so this render has different widget keys
-        st.session_state["render_nonce"] = st.session_state.get("render_nonce", 0) + 1
-        render_results(df_frames, df_events, labeled_path, key_seed=f"new_{st.session_state['render_nonce']}")
+        render_results(df_frames, df_events, labeled_path)
