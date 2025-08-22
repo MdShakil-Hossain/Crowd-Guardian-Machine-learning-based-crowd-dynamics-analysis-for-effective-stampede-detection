@@ -31,6 +31,13 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ---- one-time session init for stable keys / components ----
+if "render_nonce" not in st.session_state:
+    import time as _t
+    st.session_state["render_nonce"] = str(int(_t.time() * 1e6))
+# ensure XAI dict exists early (avoids None access on first load)
+st.session_state.setdefault("video_xai", {"events_zones": pd.DataFrame(), "snapshots": []})
+
 # ---------- Inference defaults (no UI knobs) ----------
 CNN_THRESHOLD = 0.50
 ABS_DROP      = 2
@@ -216,7 +223,7 @@ components.html("""
   }
   tick();
 </script>
-""", height=0)
+""", height=1, key="bg_particles_iframe")  # height=1 + stable key
 
 # =============================================================================
 # Sidebar — PROJECT DETAILS + Detection Mode
@@ -517,7 +524,9 @@ if load_err:
 # =============================================================================
 # Re-render persisted results
 # =============================================================================
-def render_results(df_frames, df_events, labeled_path):
+def render_results(df_frames, df_events, labeled_path, key_seed=None):
+    key_seed = key_seed or st.session_state.get("render_nonce", "0")
+
     st.markdown('<h2 class="cg-h2">Results</h2>', unsafe_allow_html=True)
 
     # KPIs
@@ -563,7 +572,7 @@ def render_results(df_frames, df_events, labeled_path):
           tick();
           setTimeout(()=>{spawn()}, 600);
         </script>
-        """, height=160)
+        """, height=160, key=f"confetti_{key_seed}")
 
     # Status banner (include active mode)
     st.markdown('<div class="cg-card">', unsafe_allow_html=True)
@@ -630,7 +639,8 @@ def render_results(df_frames, df_events, labeled_path):
     st.subheader("Per-frame predictions")
     st.dataframe(df_frames.head(1000), use_container_width=True)
 
-    uid = os.path.splitext(os.path.basename(labeled_path or "na.mp4"))[0] if labeled_path else "na"
+    uid_base = os.path.splitext(os.path.basename(labeled_path or "na.mp4"))[0] if labeled_path else "na"
+    uid = f"{uid_base}_{key_seed}"
     c1, c2, c3 = st.columns(3)
     with c1:
         st.download_button("⬇️ events.csv", df_events.to_csv(index=False).encode("utf-8"),
@@ -669,7 +679,8 @@ def render_results(df_frames, df_events, labeled_path):
                     with open(path, "rb") as fh:
                         st.download_button("⬇️ Download snapshot", fh.read(),
                                            file_name=os.path.basename(path),
-                                           mime="image/jpeg", use_container_width=True)
+                                           mime="image/jpeg", use_container_width=True,
+                                           key=f"dl_snap_{uid}_{s.get('event_id','x')}_{s.get('frame_index','y')}")
             else:
                 st.warning(f"Snapshot file missing for event {s.get('event_id','?')} (path: {path})")
             snap_rows.append({
@@ -684,7 +695,7 @@ def render_results(df_frames, df_events, labeled_path):
         st.download_button("⬇️ event_snapshots.csv",
                            df_snaps.to_csv(index=False).encode("utf-8"),
                            file_name="event_snapshots.csv", mime="text/csv",
-                           use_container_width=True)
+                           use_container_width=True, key=f"dl_snaps_csv_{uid}")
 
     st.markdown('<h2 class="cg-h2">Labeled Video Preview</h2>', unsafe_allow_html=True)
     st.info("Preview unavailable.")
@@ -692,7 +703,8 @@ def render_results(df_frames, df_events, labeled_path):
 # Persisted rerender
 if "video_results" in st.session_state:
     _res = st.session_state["video_results"]
-    render_results(_res["df_frames"], _res["df_events"], _res.get("labeled_path"))
+    render_results(_res["df_frames"], _res["df_events"], _res.get("labeled_path"),
+                   key_seed=st.session_state.get("render_nonce"))
 
 # =============================================================================
 # Upload
@@ -1160,4 +1172,6 @@ if go:
             "labeled_path": labeled_path,
         }
         st.session_state["detection_mode_label"] = detection_mode
-        render_results(df_frames, df_events, labeled_path)
+        # bump nonce so newly-created widgets get fresh keys on this rerun
+        st.session_state["render_nonce"] = str(int(time.time() * 1e6))
+        render_results(df_frames, df_events, labeled_path, key_seed=st.session_state["render_nonce"])
