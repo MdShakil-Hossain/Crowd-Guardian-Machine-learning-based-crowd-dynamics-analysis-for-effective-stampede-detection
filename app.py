@@ -38,8 +38,8 @@ if "render_nonce" not in st.session_state:
 st.session_state.setdefault("video_xai", {"events_zones": pd.DataFrame(), "snapshots": []})
 
 # ---------- Inference defaults (no UI knobs) ----------
-# Make CNN a bit stricter to reduce spurious positives on static scenes
-CNN_THRESHOLD = 0.65   # was 0.50
+# Make CNN stricter to reduce spurious positives on static scenes
+CNN_THRESHOLD = 0.75   # was 0.50 / 0.65
 
 ABS_DROP      = 2
 REL_DROP      = 0.20
@@ -80,12 +80,12 @@ MASS_DROP_PENALTY_STRENGTH= 0.25  # was 0.30
 TORSO_RATIO_MIN = 1.50   # torso must move more than head region
 TORSO_SCENE_MIN = 1.40   # torso motion must exceed scene average
 
-# Require at least N people showing head+torso down together
-HT_MIN_CAND        = 3     # try 3–5 depending on crowd size
-FLOW_MIN_FAST_FRAC = 0.12  # ≥12% of pixels faster than baseline
-FLOW_MIN_COH       = 0.50  # flow must be somewhat coherent
+# Require at least N people showing head+torso down together (for crush)
+HT_MIN_CAND        = 4     # was 3
+FLOW_MIN_FAST_FRAC = 0.18  # was 0.12
+FLOW_MIN_COH       = 0.60  # was 0.50
 
-# Quiet-scene suppression (extra guard)
+# Quiet-scene suppression (extra guard for static scenes)
 QUIET_SCENE_SUPPRESS = True
 QUIET_P95_MAX        = 1.20
 QUIET_FAST_FRAC_MAX  = 0.08
@@ -99,7 +99,7 @@ FLOW_ENABLED  = True
 SNAPSHOT_ONLY = True
 
 # ---------- Snapshot overlay control ----------
-# Red box & caption **removed** in code (no draw), this stays for compatibility only
+# Red box & caption removed (kept for compatibility only)
 SHOW_ZONE_BOX = False
 
 # Enforce: for stampede to occur whole head and body must go down together
@@ -699,7 +699,7 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
 
     snapshots = extra.get("snapshots", [])
     if snapshots:
-        st.markdown('<h2 class="cg-h2">Event Snapshots</h2>', unsafe_allow_html=True)  # removed "(red-marked zone)"
+        st.markdown('<h2 class="cg-h2">Event Snapshots</h2>', unsafe_allow_html=True)
         snap_rows = []
         for s in snapshots:
             path = s.get("path") or ""
@@ -905,6 +905,12 @@ def analyze_video(
                     )
                     fx = flow_full[..., 0].astype(np.float32)
                     fy = flow_full[..., 1].astype(np.float32)
+
+                    # ---- camera-shake compensation (remove global drift) ----
+                    gx, gy = np.median(fx), np.median(fy)
+                    fx = fx - gx
+                    fy = fy - gy
+
                     mag, ang = cv2.cartToPolar(fx, fy, angleInDegrees=False)
 
                     flow_mean = float(np.mean(mag))
@@ -956,7 +962,7 @@ def analyze_video(
             final_crush = combine_labels(y_heads, y_cnn, COMBINE_RULE)
             final_stamp = combine_labels(stampede_label, y_cnn, COMBINE_RULE)
 
-            # -------------------- XAI computations (positive frames) --------------------
+            # -------------------- XAI computations (strict head+torso) --------------------
             any_head_and_torso_down = False
             ht_cand_count = 0
 
@@ -973,7 +979,11 @@ def analyze_video(
                                 prev_gray_for_flow, gray, None,
                                 0.5, 3, 15, 3, 5, 1.2, 0
                             )
+                            # remove global camera motion for torso metric
+                            vx = flow[..., 0]
                             vy = flow[..., 1]
+                            gx, gy = np.median(vx), np.median(vy)
+                            vy = vy - gy
                             down_mag = np.maximum(vy, 0.0).astype(np.float32)
                         except cv2.error:
                             down_mag = np.zeros((H, W), dtype=np.float32)
@@ -982,6 +992,7 @@ def analyze_video(
                     down_mag = np.zeros((H, W), dtype=np.float32)
 
                 scene_mean_flow = float(down_mag.mean()) + 1e-6
+
                 grid_boxes, cell_w, cell_h = make_grid(W, H, rows=GRID_ROWS, cols=GRID_COLS)
 
                 cell_records = []
