@@ -135,7 +135,7 @@ st.markdown(
         --bg:#0a0f1a; --panel:#0e1526; --panel2:#101826;
         --muted:rgba(148,163,184,.35); --muted2:rgba(148,163,184,.18);
         --text:#e6e9ef; --accent:#ef4444; --accent2:#f97316;
-        --logo-size: 120px;           /* <— tweak this to change the hero logo size */
+        --logo-size: 86px;           /* <— change this to resize the hero logo */
       }
       html, body, [class*="css"] {
         font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif !important;
@@ -227,12 +227,11 @@ st.markdown(
       .stDataFrame {border-radius: 10px; overflow:hidden; border:1px solid var(--muted2);}
       [data-testid="stFileUploadDropzone"]{ margin-top: 0 !important; }
 
-      /* --------- Progress bar styling (gradient track + label) ---------- */
-      .progress-label{margin:6px 4px 4px; font-weight:700; letter-spacing:.2px;}
-      .stProgress > div {height: 12px; border-radius: 999px; background: rgba(255,255,255,.08);
-                         box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);}
-      .stProgress [role="progressbar"]{background: linear-gradient(90deg, var(--accent), var(--accent2));}
-
+      /* --------- Custom progress bar (single gradient bar) ---------- */
+      .cg-prog-label{margin:6px 4px 6px; font-weight:700; letter-spacing:.2px;}
+      .cg-prog-track{height:12px; border-radius:999px; background:rgba(255,255,255,.08);
+                      box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);}
+      .cg-prog-fill{height:12px; border-radius:999px; background:linear-gradient(90deg, var(--accent), var(--accent2));}
     </style>
     """,
     unsafe_allow_html=True,
@@ -240,14 +239,9 @@ st.markdown(
 
 # ---------- safe wrapper for components.html ----------
 def _safe_html(html: str, *, height: int, key: str, scrolling: bool=False, width: int=0):
-    """
-    Render a components.html panel but never crash the app if the frontend
-    doesn't like the message shape (TypeError / Bad message format).
-    """
     try:
         components.html(html, height=height, key=key, scrolling=scrolling, width=width)
     except TypeError:
-        # swallow and continue – background / confetti are non-essential
         pass
     except Exception:
         pass
@@ -411,7 +405,7 @@ def build_blob_detector(frame_w, frame_h, min_frac=MIN_FRAC, max_frac=MAX_FRAC,
     p.minThreshold, p.maxThreshold, p.thresholdStep = 10, 220, thresh_step
     p.filterByArea, p.minArea, p.maxArea = True, minArea, maxArea
     p.filterByCircularity, p.minCircularity = True, min_circ
-    p.filterByInertia, p.minInertiaRatio = True, min_inertia
+    p.filterByInertia, p.minInertiaRatio = True, min_iner
     p.filterByConvexity = p.filterByColor = False
     return (cv2.SimpleBlobDetector(p) if int(cv2.__version__.split('.')[0]) < 3
             else cv2.SimpleBlobDetector_create(p))
@@ -892,12 +886,25 @@ def analyze_video(
     window_frames = max(1, int(round(HEAD_DOWN_WINDOW_SEC * (fps/step))))
     streak_frames = max(2, int(round(HEAD_DOWN_MIN_STREAK_SEC * (fps/step))))
 
-    # Styled progress bar + label (like original)
-    prog_label = st.markdown('<div class="progress-label">Processing frames… 0%</div>', unsafe_allow_html=True)
-    prog = st.progress(0.0)
+    # --------- Custom progress (single gradient bar) ----------
+    prog_box = st.empty()
     status = st.empty()
     processed = 0
     total_steps = (N // step + 1) if N > 0 else 0
+
+    def render_prog(frac, processed, total):
+        pct = int(round(100.0 * max(0.0, min(1.0, frac))))
+        prog_box.markdown(
+            f'''
+            <div class="cg-prog">
+              <div class="cg-prog-label">Processing frames… <b>{pct}%</b> ({processed}/{total})</div>
+              <div class="cg-prog-track"><div class="cg-prog-fill" style="width:{pct}%"></div></div>
+            </div>
+            ''',
+            unsafe_allow_html=True
+        )
+
+    render_prog(0.0, 0, total_steps)
 
     # helper to save the best snapshot per event — NO drawing overlays
     def save_current_best():
@@ -1206,9 +1213,7 @@ def analyze_video(
             processed += 1
             if total_steps:
                 frac = min(1.0, processed/total_steps)
-                pct = int(round(100.0*frac))
-                prog.progress(frac)
-                prog_label.markdown(f'<div class="progress-label">Processing frames… <b>{pct}%</b> ({processed}/{total_steps})</div>', unsafe_allow_html=True)
+                render_prog(frac, processed, total_steps)
                 status.write(f"Processed {processed}/{total_steps} sampled frames…")
         f += 1
 
@@ -1220,7 +1225,7 @@ def analyze_video(
 
     cap.release()
 
-    prog.progress(1.0)
+    render_prog(1.0, total_steps, total_steps)
     status.write("Done.")
     df_frames = pd.DataFrame(frames_rows[1:], columns=frames_rows[0])
     df_events = pd.DataFrame(events_rows[1:], columns=events_rows[0])
@@ -1255,4 +1260,3 @@ if go:
         st.session_state["detection_mode_label"] = detection_mode
         st.session_state["render_nonce"] = str(int(time.time() * 1e6))
         render_results(df_frames, df_events, labeled_path, key_seed=st.session_state["render_nonce"])
-
