@@ -172,7 +172,7 @@ st.markdown(
         display:flex; align-items:center; gap:18px; justify-content:center;
       }
       .cg-logo{
-        width:auto; height:64px; border-radius:14px; box-shadow: 0 8px 18px rgba(0,0,0,.35);
+        width:auto; height:64px; border-radius:18px; box-shadow: 0 8px 18px rgba(0,0,0,.35);
       }
       .cg-title  {font-size: 2.75rem; line-height: 1.08; margin: 0 0 .35rem 0; letter-spacing:.1px;}
       .cg-subtle {opacity:.95; margin:0; font-size: 1.08rem;}
@@ -1257,3 +1257,4 @@ if go:
         st.session_state["detection_mode_label"] = detection_mode
         st.session_state["render_nonce"] = str(int(time.time() * 1e6))
         render_results(df_frames, df_events, labeled_path, key_seed=st.session_state["render_nonce"])
+
