@@ -38,12 +38,10 @@ if "render_nonce" not in st.session_state:
 st.session_state.setdefault("video_xai", {"events_zones": pd.DataFrame(), "snapshots": []})
 
 # ---------- Inference defaults (no UI knobs) ----------
-# Make CNN stricter to reduce spurious positives on static scenes
-CNN_THRESHOLD = 0.75   # was 0.50 / 0.65
-
+CNN_THRESHOLD = 0.75   # stricter
 ABS_DROP      = 2
 REL_DROP      = 0.20
-MIN_EVENT_SEC = 1.5     # was 1.0 → avoid blink events
+MIN_EVENT_SEC = 1.5
 COMBINE_RULE  = "and"
 MIN_FRAC      = 0.00005
 MAX_FRAC      = 0.0020
@@ -66,43 +64,38 @@ GRID_ROWS     = 6
 GRID_COLS     = 6
 
 # Head+Torso collapse detector (primary signal)
-# Tightened to ignore phone-looking head tilts
 HEAD_DOWN_WINDOW_SEC      = 0.8
-HEAD_DOWN_MIN_DY_FRAC     = 0.06  # was 0.02
-HEAD_DOWN_MIN_DY_RAD      = 1.20  # was 0.8
-HEAD_DOWN_MIN_STREAK_SEC  = 0.80  # was 0.35
+HEAD_DOWN_MIN_DY_FRAC     = 0.06
+HEAD_DOWN_MIN_DY_RAD      = 1.20
+HEAD_DOWN_MIN_STREAK_SEC  = 0.80
 NEIGH_RADIUS_MULT         = 3.0
-NEIGH_REL_MIN_RAD         = 1.20  # was 0.6
-MASS_DROP_PENALTY_START   = 0.88  # was 0.80
-MASS_DROP_PENALTY_STRENGTH= 0.25  # was 0.30
+NEIGH_REL_MIN_RAD         = 1.20
+MASS_DROP_PENALTY_START   = 0.88
+MASS_DROP_PENALTY_STRENGTH= 0.25
 
-# Torso motion requirements (both head AND torso must go down together)
-TORSO_RATIO_MIN = 1.50   # torso must move more than head region
-TORSO_SCENE_MIN = 1.40   # torso motion must exceed scene average
+# Torso motion requirements
+TORSO_RATIO_MIN = 1.50
+TORSO_SCENE_MIN = 1.40
 
-# Require at least N people showing head+torso down together (for crush)
-HT_MIN_CAND        = 4     # was 3
-FLOW_MIN_FAST_FRAC = 0.18  # was 0.12
-FLOW_MIN_COH       = 0.60  # was 0.50
+# Require at least N people showing head+torso down together
+HT_MIN_CAND        = 4
+FLOW_MIN_FAST_FRAC = 0.18
+FLOW_MIN_COH       = 0.60
 
-# Quiet-scene suppression (extra guard for static scenes)
+# Quiet-scene suppression
 QUIET_SCENE_SUPPRESS = True
 QUIET_P95_MAX        = 1.20
 QUIET_FAST_FRAC_MAX  = 0.08
 QUIET_COH_MAX        = 0.45
 
 # risk weights
-W_HEADDOWN, W_FLOW, W_CAM = 0.60, 0.22, 0.18  # slightly rebalanced
+W_HEADDOWN, W_FLOW, W_CAM = 0.60, 0.22, 0.18
 
-# Ancillary cues
 FLOW_ENABLED  = True
 SNAPSHOT_ONLY = True
 
 # ---------- Snapshot overlay control ----------
-# Red box & caption removed (kept for compatibility only)
 SHOW_ZONE_BOX = False
-
-# Enforce: for stampede to occur whole head and body must go down together
 STRICT_REQUIRE_HEAD_AND_TORSO = True
 
 # ---------- Model location ----------
@@ -247,13 +240,11 @@ def _safe_html(html: str, *, height: int, key: str, scrolling: bool=False, width
         pass
 
 # =============================================================================
-# Background Particles (JS canvas behind page)
+# Background Particles
 # =============================================================================
 _safe_html("""
 <canvas id="cg-bg"></canvas>
-<style>
-  #cg-bg{position:fixed; inset:0; z-index:-2; background:transparent;}
-</style>
+<style>#cg-bg{position:fixed; inset:0; z-index:-2; background:transparent;}</style>
 <script>
   const c = document.getElementById('cg-bg'), ctx = c.getContext('2d');
   function resize(){ c.width = innerWidth; c.height = innerHeight; }
@@ -337,7 +328,6 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-    # ---- Detection Mode switch ----
     detection_mode = st.selectbox(
         "Detection Mode",
         ["Hybrid (Default)", "Stampede (Running Panic)", "Crush/Surge (Compression)"],
@@ -398,7 +388,8 @@ def sec_to_tc(sec: float) -> str:
     return f"{h:02d}:{m:02d}:{s:06.3f}"
 
 def build_blob_detector(frame_w, frame_h, min_frac=MIN_FRAC, max_frac=MAX_FRAC,
-                        min_circ=MIN_CIRC, min_inertia=MIN_INER, thresh_step=10):
+                        min_circ=MIN_CIRC, min_iner=MIN_INER, thresh_step=10):
+    """Consistent param name: min_iner (fixes NameError)."""
     area = float(frame_w * frame_h)
     minArea = max(5.0, min_frac * area); maxArea = max(minArea + 1.0, max_frac * area)
     p = cv2.SimpleBlobDetector_Params()
@@ -479,7 +470,6 @@ def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
             return tf.squeeze(t, axis=-1) if c == 1 else t[:, -1]
         return tf.reshape(t, (tf.shape(t)[0], -1))[:, -1]
 
-    # pick last conv
     target_layer = None
     if conv_layer_name:
         try:
@@ -605,7 +595,7 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
     c2.metric("Total Duration (s)", f"{total_dur:.2f}")
     c3.metric("Longest Event (s)", f"{longest:.2f}")
 
-    # Confetti if detected (safe)
+    # Confetti if detected
     if total_events > 0:
         _safe_html("""
         <canvas id="c"></canvas>
@@ -1005,7 +995,7 @@ def analyze_video(
             p_cnn = float(model.predict(x, verbose=0)[0][0])
             y_cnn = 1 if p_cnn >= cnn_threshold else 0
 
-            # Mode-aware intermediates (legacy)
+            # Mode-aware intermediates
             final_crush = combine_labels(y_heads, y_cnn, COMBINE_RULE)
             final_stamp = combine_labels(stampede_label, y_cnn, COMBINE_RULE)
 
@@ -1162,30 +1152,25 @@ def analyze_video(
                         "cnn_cell": rc["cnn_cell"],
                     })
 
-            # heads_torso_label captures strict requirement: head AND torso down together
             heads_torso_label = 1 if any_head_and_torso_down else 0
 
             # ---------- FINAL LABEL LOGIC ----------
-            # Demand crowd motion AND multiple head+torso candidates AND CNN agreement
             motion_ok = (flow_fast_frac >= FLOW_MIN_FAST_FRAC) and (flow_coh >= FLOW_MIN_COH)
             strict_crush = 1 if (ht_cand_count >= HT_MIN_CAND and y_cnn == 1 and motion_ok) else 0
 
             mode = (detection_mode or "Hybrid").lower()
             if "stampede" in mode:
-                final_label = final_stamp   # running panic path (flow signature)
+                final_label = final_stamp
             elif "crush" in mode or "surge" in mode:
                 final_label = strict_crush
             else:
-                # Hybrid: either clear running panic OR strict crush
                 final_label = 1 if (final_stamp == 1 or strict_crush == 1) else 0
 
-            # Veto weird still scenes if needed
             if QUIET_SCENE_SUPPRESS and final_label == 1:
                 quiet_scene = (flow_p95 < QUIET_P95_MAX) and (flow_fast_frac < QUIET_FAST_FRAC_MAX) and (flow_coh < QUIET_COH_MAX)
                 if quiet_scene and strict_crush == 1 and final_stamp == 0:
                     final_label = 0
 
-            # Append row
             t = f / fps; tc = sec_to_tc(t)
             frames_rows.append((
                 f, t, tc,
@@ -1196,7 +1181,6 @@ def analyze_video(
                 final_label
             ))
 
-            # Event handling
             if final_label == 1 and not in_event:
                 in_event, start_f, start_t = True, f, t
                 event_id += 1
