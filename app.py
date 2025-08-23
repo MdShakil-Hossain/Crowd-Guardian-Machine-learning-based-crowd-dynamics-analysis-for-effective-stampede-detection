@@ -105,7 +105,7 @@ SHOW_ZONE_BOX = False
 # Enforce: for stampede to occur whole head and body must go down together
 STRICT_REQUIRE_HEAD_AND_TORSO = True
 
-# ---------- Model & Assets ----------
+# ---------- Model location ----------
 APP_DIR = Path(__file__).resolve().parent
 CACHE_DIR = APP_DIR / "models"; CACHE_DIR.mkdir(exist_ok=True)
 DEFAULT_MODEL_URL = (
@@ -114,9 +114,15 @@ DEFAULT_MODEL_URL = (
 )
 MODEL_URL = st.secrets.get("MODEL_URL", DEFAULT_MODEL_URL)
 
-# Logo (left of hero bar)
-LOGO_PATH = APP_DIR / "assets" / "Crowd_Guardian_EWU_logo.png"
-LOGO_SIZE_PX = 84  # change this to resize logo in the hero
+# ---------- Load logo (base64) ----------
+def _load_logo_b64():
+    try:
+        logo_path = APP_DIR / "assets" / "Crowd_Guardian_EWU_logo.png"
+        with open(logo_path, "rb") as f:
+            return base64.b64encode(f.read()).decode("ascii")
+    except Exception:
+        return ""
+LOGO_B64 = _load_logo_b64()
 
 # =============================================================================
 # Global styles (HTML/CSS)
@@ -129,6 +135,7 @@ st.markdown(
         --bg:#0a0f1a; --panel:#0e1526; --panel2:#101826;
         --muted:rgba(148,163,184,.35); --muted2:rgba(148,163,184,.18);
         --text:#e6e9ef; --accent:#ef4444; --accent2:#f97316;
+        --logo-size: 86px;           /* <— tweak this to change the hero logo size */
       }
       html, body, [class*="css"] {
         font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif !important;
@@ -143,17 +150,21 @@ st.markdown(
       }
       header{visibility:hidden;} [data-testid="stToolbar"]{display:none;} #MainMenu{visibility:hidden;} footer{visibility:hidden;}
 
+      /* ---------------- Hero ---------------- */
       .cg-hero {
-        margin-top: 8px; padding: 30px 32px; border-radius: 20px;
-        border: 1px solid var(--muted2);
+        position: relative;
+        margin-top: 8px; padding: 30px 32px 32px 128px;   /* left padding reserves space for logo */
+        border-radius: 20px; border: 1px solid var(--muted2);
         background:
           radial-gradient(1200px 420px at 0% -10%, rgba(59,130,246,.16), transparent),
           linear-gradient(180deg, rgba(17,24,39,.55), rgba(2,6,23,.45));
-        text-align: left; box-shadow: 0 10px 30px rgba(0,0,0,.25);
+        text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,.25);
       }
-      .cg-hero-grid{display:flex; align-items:center; gap:18px;}
       .cg-logo{
-        width:auto; height:__LOGO_SIZE_PX__px; border-radius:14px; box-shadow: 0 8px 18px rgba(0,0,0,.35);
+        position:absolute; left:26px; top:50%; transform: translateY(-50%);
+        width: var(--logo-size); height: var(--logo-size);
+        border-radius: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.35), 0 0 0 3px rgba(255,255,255,.05) inset;
+        object-fit: cover; background: rgba(255,255,255,.06);
       }
       .cg-title  {font-size: 2.75rem; line-height: 1.08; margin: 0 0 .35rem 0; letter-spacing:.1px;}
       .cg-subtle {opacity:.95; margin:0; font-size: 1.08rem;}
@@ -215,8 +226,15 @@ st.markdown(
 
       .stDataFrame {border-radius: 10px; overflow:hidden; border:1px solid var(--muted2);}
       [data-testid="stFileUploadDropzone"]{ margin-top: 0 !important; }
+
+      /* --------- Progress bar styling (gradient track + label) ---------- */
+      .progress-label{margin:6px 4px 4px; font-weight:700; letter-spacing:.2px;}
+      .stProgress > div {height: 12px; border-radius: 999px; background: rgba(255,255,255,.08);
+                         box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);}
+      .stProgress [role="progressbar"]{background: linear-gradient(90deg, var(--accent), var(--accent2));}
+
     </style>
-    """.replace("__LOGO_SIZE_PX__", str(LOGO_SIZE_PX)),
+    """,
     unsafe_allow_html=True,
 )
 
@@ -334,56 +352,25 @@ with st.sidebar:
     )
 
 # =============================================================================
-# Hero (logo + title)
+# Hero (logo left, text centered)
 # =============================================================================
-def _img_b64(path: Path, max_w_px: int | None = None) -> str:
-    """
-    Load image from disk, optionally downscale by width, return base64-encoded PNG.
-    """
-    try:
-        arr = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_UNCHANGED)
-        if arr is not None and max_w_px and arr.shape[1] > max_w_px:
-            scale = float(max_w_px) / float(arr.shape[1])
-            new_w = int(arr.shape[1] * scale)
-            new_h = int(arr.shape[0] * scale)
-            arr = cv2.resize(arr, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        if arr is not None:
-            ok, buf = cv2.imencode(".png", arr)
-            if ok:
-                return base64.b64encode(buf.tobytes()).decode("ascii")
-    except Exception:
-        pass
-    try:
-        with open(path, "rb") as f:
-            return base64.b64encode(f.read()).decode("ascii")
-    except Exception:
-        return ""
-
-LOGO_B64 = _img_b64(LOGO_PATH, max_w_px=max(2*LOGO_SIZE_PX, LOGO_SIZE_PX))
-
 if LOGO_B64:
-    st.markdown(
-        f'''
-        <div class="cg-hero">
-          <div class="cg-hero-grid">
-            <img class="cg-logo" src="data:image/png;base64,{LOGO_B64}" alt="logo"/>
-            <div>
-              <div class="cg-title">Crowd Guardian</div>
-              <div class="cg-subtle">Machine learning based crowd dynamics analysis for effective stampede detection</div>
-            </div>
-          </div>
-        </div>
-        ''',
-        unsafe_allow_html=True,
-    )
+    logo_tag = f'<img class="cg-logo" alt="Crowd Guardian Logo" src="data:image/png;base64,{LOGO_B64}"/>'
 else:
-    st.markdown(
-        '<div class="cg-hero">'
-        '<div class="cg-title">Crowd Guardian</div>'
-        '<div class="cg-subtle">Machine learning based crowd dynamics analysis for effective stampede detection</div>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
+    logo_tag = ''
+
+st.markdown(
+    f'''
+    <div class="cg-hero">
+      {logo_tag}
+      <div class="cg-hero-center">
+        <div class="cg-title">Crowd Guardian</div>
+        <div class="cg-subtle">Machine learning based crowd dynamics analysis for effective stampede detection</div>
+      </div>
+    </div>
+    ''',
+    unsafe_allow_html=True,
+)
 
 # =============================================================================
 # Helpers (ML + I/O)
@@ -905,10 +892,12 @@ def analyze_video(
     window_frames = max(1, int(round(HEAD_DOWN_WINDOW_SEC * (fps/step))))
     streak_frames = max(2, int(round(HEAD_DOWN_MIN_STREAK_SEC * (fps/step))))
 
-    # ---- Simple Streamlit progress (original style) ----
+    # Styled progress bar + label (like original)
+    prog_label = st.markdown('<div class="progress-label">Processing frames… 0%</div>', unsafe_allow_html=True)
     prog = st.progress(0.0)
     status = st.empty()
-    processed = 0; total_steps = (N // step + 1) if N > 0 else 0
+    processed = 0
+    total_steps = (N // step + 1) if N > 0 else 0
 
     # helper to save the best snapshot per event — NO drawing overlays
     def save_current_best():
@@ -1143,7 +1132,7 @@ def analyze_video(
                 bx0,by0,bx1,by1 = best["x0"], best["y0"], best["x1"], best["y1"]
                 best_risk = best["risk"]
 
-                if (current_best is None) or (best_risk > float(current_best["risk_score"])):
+                if (current_best is None) or (best_risk > float(current_best["risk_score"])) or (current_best and current_best.get("event_id") != event_id):
                     current_best = {
                         "event_id": event_id,
                         "frame": frame_bgr.copy(),
@@ -1216,7 +1205,10 @@ def analyze_video(
 
             processed += 1
             if total_steps:
-                prog.progress(min(1.0, processed/total_steps))
+                frac = min(1.0, processed/total_steps)
+                pct = int(round(100.0*frac))
+                prog.progress(frac)
+                prog_label.markdown(f'<div class="progress-label">Processing frames… <b>{pct}%</b> ({processed}/{total_steps})</div>', unsafe_allow_html=True)
                 status.write(f"Processed {processed}/{total_steps} sampled frames…")
         f += 1
 
@@ -1228,7 +1220,8 @@ def analyze_video(
 
     cap.release()
 
-    prog.progress(1.0); status.write("Done.")
+    prog.progress(1.0)
+    status.write("Done.")
     df_frames = pd.DataFrame(frames_rows[1:], columns=frames_rows[0])
     df_events = pd.DataFrame(events_rows[1:], columns=events_rows[0])
 
