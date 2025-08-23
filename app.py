@@ -114,6 +114,26 @@ DEFAULT_MODEL_URL = (
 )
 MODEL_URL = st.secrets.get("MODEL_URL", DEFAULT_MODEL_URL)
 
+# Optional logo (left of title). Put your image at ./assets/Crowd_Guardian_EWU_logo.png
+LOGO_PATH = APP_DIR / "assets" / "Crowd_Guardian_EWU_logo.png"
+
+def _img_b64(path: Path, max_w_px=72, radius_px=12) -> str:
+    try:
+        if not path.exists(): return ""
+        img = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+        if img is None: return ""
+        h, w = img.shape[:2]
+        scale = min(1.0, float(max_w_px) / float(w))
+        if scale < 1.0:
+            img = cv2.resize(img, (int(w*scale), int(h*scale)), interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".png", img)
+        if not ok: return ""
+        return base64.b64encode(buf.tobytes()).decode("ascii")
+    except Exception:
+        return ""
+
+LOGO_B64 = _img_b64(LOGO_PATH, max_w_px=80)
+
 # =============================================================================
 # Global styles (HTML/CSS)
 # =============================================================================
@@ -139,8 +159,8 @@ st.markdown(
       }
       header{visibility:hidden;} [data-testid="stToolbar"]{display:none;} #MainMenu{visibility:hidden;} footer{visibility:hidden;}
 
+      /* Hero — restored centered style, optional left logo inline */
       .cg-hero {
-        position: relative; /* so the logo can be absolutely positioned */
         margin-top: 8px; padding: 30px 32px; border-radius: 20px;
         border: 1px solid var(--muted2);
         background:
@@ -148,19 +168,14 @@ st.markdown(
           linear-gradient(180deg, rgba(17,24,39,.55), rgba(2,6,23,.45));
         text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,.25);
       }
+      .cg-hero-inner{
+        display:flex; align-items:center; gap:18px; justify-content:center;
+      }
+      .cg-logo{
+        width:auto; height:64px; border-radius:14px; box-shadow: 0 8px 18px rgba(0,0,0,.35);
+      }
       .cg-title  {font-size: 2.75rem; line-height: 1.08; margin: 0 0 .35rem 0; letter-spacing:.1px;}
       .cg-subtle {opacity:.95; margin:0; font-size: 1.08rem;}
-
-      /* Bigger, left-anchored logo that doesn't disturb centered text */
-      .cg-logo{
-        position:absolute; left:24px; top:50%; transform:translateY(-50%);
-        width:96px; height:96px; object-fit:contain;
-        border-radius:14px; box-shadow:0 8px 24px rgba(0,0,0,.35);
-        background: rgba(255,255,255,.06);
-      }
-      @media (max-width: 720px){
-        .cg-logo{ left:16px; width:64px; height:64px; border-radius:12px; }
-      }
 
       .cg-h2 {text-align:center; margin: 1.1rem 0 .7rem 0; font-size:1.35rem;}
       .cg-card {border: 1px solid var(--muted2); border-radius: 16px; padding: 14px 16px;
@@ -219,6 +234,11 @@ st.markdown(
 
       .stDataFrame {border-radius: 10px; overflow:hidden; border:1px solid var(--muted2);}
       [data-testid="stFileUploadDropzone"]{ margin-top: 0 !important; }
+
+      /* Nicer progress bar (and ensure thicker look) */
+      .stProgress > div { background: rgba(148,163,184,.25); border-radius: 999px; overflow: hidden; }
+      .stProgress > div > div { height: 10px; background: linear-gradient(90deg, var(--accent), var(--accent2));
+                                box-shadow: 0 6px 18px rgba(249,115,22,.35); }
     </style>
     """,
     unsafe_allow_html=True,
@@ -338,27 +358,19 @@ with st.sidebar:
     )
 
 # =============================================================================
-# Hero
+# Hero (centered) + optional logo at left
 # =============================================================================
-def _img_data_url(path: str) -> str:
-    """Load an image from disk and return a data URL (so it works on Streamlit Cloud/GitHub)."""
-    try:
-        with open(path, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode("ascii")
-        ext = os.path.splitext(path)[1].lower()
-        mime = "image/png" if ext == ".png" else "image/jpeg"
-        return f"data:{mime};base64,{b64}"
-    except Exception:
-        return ""
-
-_logo_src = _img_data_url(os.path.join("assets", "Crowd_Guardian_EWU_logo.png"))
-
+hero_logo_html = f'<img class="cg-logo" src="data:image/png;base64,{LOGO_B64}" alt="logo" />' if LOGO_B64 else ''
 st.markdown(
     f'''
     <div class="cg-hero">
-      {f'<img class="cg-logo" src="{_logo_src}" alt="Crowd Guardian logo" />' if _logo_src else ''}
-      <div class="cg-title">Crowd Guardian</div>
-      <div class="cg-subtle">Machine learning based crowd dynamics analysis for effective stampede detection</div>
+      <div class="cg-hero-inner">
+        {hero_logo_html}
+        <div>
+          <div class="cg-title">Crowd Guardian</div>
+          <div class="cg-subtle">Machine learning based crowd dynamics analysis for effective stampede detection</div>
+        </div>
+      </div>
     </div>
     ''',
     unsafe_allow_html=True,
@@ -840,7 +852,7 @@ def analyze_video(
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     W   = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     H   = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    N   = int(cv2.CAP_PROP_FRAME_COUNT) or 0
+    N   = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
 
     step = 1 if not target_fps or target_fps <= 0 else max(1, int(round(fps / float(target_fps))))
     max_match_dist = max(15, int(0.03 * max(W, H)))
@@ -884,8 +896,11 @@ def analyze_video(
     window_frames = max(1, int(round(HEAD_DOWN_WINDOW_SEC * (fps/step))))
     streak_frames = max(2, int(round(HEAD_DOWN_MIN_STREAK_SEC * (fps/step))))
 
-    prog = st.progress(0.0); status = st.empty()
-    processed = 0; total_steps = (N // step + 1) if N > 0 else 0
+    # ---- Progress bar (0–100%) ----
+    prog = st.progress(0, text="Starting…")
+    status = st.empty()
+    processed = 0
+    total_steps = (N // step + 1) if N > 0 else 0
 
     # helper to save the best snapshot per event — NO drawing overlays
     def save_current_best():
@@ -1191,10 +1206,12 @@ def analyze_video(
                     if current_best: save_current_best()
                 in_event, start_f, start_t = False, None, None
 
-            processed += 1
+            # ---- update progress bar (0–100) ----
             if total_steps:
-                prog.progress(min(1.0, processed/total_steps))
+                pct = int(100 * processed / max(1, total_steps))
+                prog.progress(min(100, pct), text=f"Processing frames… {pct}% ({processed}/{total_steps})")
                 status.write(f"Processed {processed}/{total_steps} sampled frames…")
+            processed += 1
         f += 1
 
     if in_event and start_f is not None:
@@ -1205,7 +1222,8 @@ def analyze_video(
 
     cap.release()
 
-    prog.progress(1.0); status.write("Done.")
+    prog.progress(100, text="Done.")
+    status.write("Done.")
     df_frames = pd.DataFrame(frames_rows[1:], columns=frames_rows[0])
     df_events = pd.DataFrame(events_rows[1:], columns=events_rows[0])
 
