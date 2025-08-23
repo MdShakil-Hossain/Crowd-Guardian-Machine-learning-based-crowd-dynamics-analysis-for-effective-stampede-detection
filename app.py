@@ -140,6 +140,7 @@ st.markdown(
       header{visibility:hidden;} [data-testid="stToolbar"]{display:none;} #MainMenu{visibility:hidden;} footer{visibility:hidden;}
 
       .cg-hero {
+        position: relative; /* so the logo can be absolutely positioned */
         margin-top: 8px; padding: 30px 32px; border-radius: 20px;
         border: 1px solid var(--muted2);
         background:
@@ -147,13 +148,19 @@ st.markdown(
           linear-gradient(180deg, rgba(17,24,39,.55), rgba(2,6,23,.45));
         text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,.25);
       }
-      /* NEW: hero layout with logo on the left */
-      .cg-hero-inner{display:flex; align-items:center; gap:16px; text-align:left; justify-content:center;}
-      .cg-logo{width:64px; height:64px; object-fit:contain; border-radius:12px; box-shadow:0 6px 18px rgba(0,0,0,.25);}
-      @media (max-width:720px){ .cg-logo{width:48px; height:48px;} }
-
       .cg-title  {font-size: 2.75rem; line-height: 1.08; margin: 0 0 .35rem 0; letter-spacing:.1px;}
       .cg-subtle {opacity:.95; margin:0; font-size: 1.08rem;}
+
+      /* Bigger, left-anchored logo that doesn't disturb centered text */
+      .cg-logo{
+        position:absolute; left:24px; top:50%; transform:translateY(-50%);
+        width:96px; height:96px; object-fit:contain;
+        border-radius:14px; box-shadow:0 8px 24px rgba(0,0,0,.35);
+        background: rgba(255,255,255,.06);
+      }
+      @media (max-width: 720px){
+        .cg-logo{ left:16px; width:64px; height:64px; border-radius:12px; }
+      }
 
       .cg-h2 {text-align:center; margin: 1.1rem 0 .7rem 0; font-size:1.35rem;}
       .cg-card {border: 1px solid var(--muted2); border-radius: 16px; padding: 14px 16px;
@@ -331,10 +338,10 @@ with st.sidebar:
     )
 
 # =============================================================================
-# Hero (with left-aligned logo)
+# Hero
 # =============================================================================
 def _img_data_url(path: str) -> str:
-    """Return a data: URL for a local image path; fallback to empty string."""
+    """Load an image from disk and return a data URL (so it works on Streamlit Cloud/GitHub)."""
     try:
         with open(path, "rb") as f:
             b64 = base64.b64encode(f.read()).decode("ascii")
@@ -345,16 +352,13 @@ def _img_data_url(path: str) -> str:
         return ""
 
 _logo_src = _img_data_url(os.path.join("assets", "Crowd_Guardian_EWU_logo.png"))
+
 st.markdown(
     f'''
     <div class="cg-hero">
-      <div class="cg-hero-inner">
-        {f'<img class="cg-logo" src="{_logo_src}" alt="Crowd Guardian logo" />' if _logo_src else ''}
-        <div>
-          <div class="cg-title">Crowd Guardian</div>
-          <div class="cg-subtle">Machine learning based crowd dynamics analysis for effective stampede detection</div>
-        </div>
-      </div>
+      {f'<img class="cg-logo" src="{_logo_src}" alt="Crowd Guardian logo" />' if _logo_src else ''}
+      <div class="cg-title">Crowd Guardian</div>
+      <div class="cg-subtle">Machine learning based crowd dynamics analysis for effective stampede detection</div>
     </div>
     ''',
     unsafe_allow_html=True,
@@ -836,7 +840,7 @@ def analyze_video(
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     W   = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     H   = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    N   = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    N   = int(cv2.CAP_PROP_FRAME_COUNT) or 0
 
     step = 1 if not target_fps or target_fps <= 0 else max(1, int(round(fps / float(target_fps))))
     max_match_dist = max(15, int(0.03 * max(W, H)))
