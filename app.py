@@ -147,6 +147,11 @@ st.markdown(
           linear-gradient(180deg, rgba(17,24,39,.55), rgba(2,6,23,.45));
         text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,.25);
       }
+      /* NEW: hero layout with logo on the left */
+      .cg-hero-inner{display:flex; align-items:center; gap:16px; text-align:left; justify-content:center;}
+      .cg-logo{width:64px; height:64px; object-fit:contain; border-radius:12px; box-shadow:0 6px 18px rgba(0,0,0,.25);}
+      @media (max-width:720px){ .cg-logo{width:48px; height:48px;} }
+
       .cg-title  {font-size: 2.75rem; line-height: 1.08; margin: 0 0 .35rem 0; letter-spacing:.1px;}
       .cg-subtle {opacity:.95; margin:0; font-size: 1.08rem;}
 
@@ -326,13 +331,32 @@ with st.sidebar:
     )
 
 # =============================================================================
-# Hero
+# Hero (with left-aligned logo)
 # =============================================================================
+def _img_data_url(path: str) -> str:
+    """Return a data: URL for a local image path; fallback to empty string."""
+    try:
+        with open(path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+        ext = os.path.splitext(path)[1].lower()
+        mime = "image/png" if ext == ".png" else "image/jpeg"
+        return f"data:{mime};base64,{b64}"
+    except Exception:
+        return ""
+
+_logo_src = _img_data_url(os.path.join("assets", "Crowd_Guardian_EWU_logo.png"))
 st.markdown(
-    '<div class="cg-hero">'
-    '<div class="cg-title">Crowd Guardian</div>'
-    '<div class="cg-subtle">Machine learning based crowd dynamics analysis for effective stampede detection</div>'
-    '</div>',
+    f'''
+    <div class="cg-hero">
+      <div class="cg-hero-inner">
+        {f'<img class="cg-logo" src="{_logo_src}" alt="Crowd Guardian logo" />' if _logo_src else ''}
+        <div>
+          <div class="cg-title">Crowd Guardian</div>
+          <div class="cg-subtle">Machine learning based crowd dynamics analysis for effective stampede detection</div>
+        </div>
+      </div>
+    </div>
+    ''',
     unsafe_allow_html=True,
 )
 
