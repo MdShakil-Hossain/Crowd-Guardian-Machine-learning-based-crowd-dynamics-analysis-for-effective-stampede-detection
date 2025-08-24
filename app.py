@@ -110,7 +110,7 @@ MODEL_URL = st.secrets.get("MODEL_URL", DEFAULT_MODEL_URL)
 # ---------- Load logo (base64) ----------
 def _load_logo_b64():
     try:
-        logo_path = APP_DIR / "assets" / "Crowd_Guardian_EWU_logo.png"
+        logo_path = APP_DIR / "assets" / "Crowd_Guardian_EWU_logo2.png"
         with open(logo_path, "rb") as f:
             return base64.b64encode(f.read()).decode("ascii")
     except Exception:
@@ -1244,4 +1244,5 @@ if go:
         st.session_state["detection_mode_label"] = detection_mode
         st.session_state["render_nonce"] = str(int(time.time() * 1e6))
         render_results(df_frames, df_events, labeled_path, key_seed=st.session_state["render_nonce"])
+
 
