@@ -51,7 +51,7 @@ MIN_INER      = 0.10
 DRAW_LINKS    = True
 TARGET_FPS    = None  # None = use every frame
 
-# ---------- Stampede (running-panic) thresholds ----------
+# ---------- Stampede thresholds ----------
 STAMP_BASELINE_SEC   = 5.0
 FLOW_MEAN_Z          = 1.0
 FLOW_P95_MIN         = 3.0
@@ -64,7 +64,7 @@ XAI_ENABLED   = True
 GRID_ROWS     = 6
 GRID_COLS     = 6
 
-# Head+Torso collapse detector (primary signal)
+# Head+Torso collapse detector
 HEAD_DOWN_WINDOW_SEC      = 0.8
 HEAD_DOWN_MIN_DY_FRAC     = 0.06
 HEAD_DOWN_MIN_DY_RAD      = 1.20
@@ -78,7 +78,7 @@ MASS_DROP_PENALTY_STRENGTH= 0.25
 TORSO_RATIO_MIN = 1.50
 TORSO_SCENE_MIN = 1.40
 
-# Require at least N people showing head+torso down together
+# Require at least N people
 HT_MIN_CAND        = 4
 FLOW_MIN_FAST_FRAC = 0.18
 FLOW_MIN_COH       = 0.60
@@ -89,7 +89,7 @@ QUIET_P95_MAX        = 1.20
 QUIET_FAST_FRAC_MAX  = 0.08
 QUIET_COH_MAX        = 0.45
 
-# risk weights
+# risk weights (internal only)
 W_HEADDOWN, W_FLOW, W_CAM = 0.60, 0.22, 0.18
 
 FLOW_ENABLED  = True
@@ -129,12 +129,9 @@ st.markdown(
         --bg:#0a0f1a; --panel:#0e1526; --panel2:#101826;
         --muted:rgba(148,163,184,.35); --muted2:rgba(148,163,184,.18);
         --text:#e6e9ef; --accent:#ef4444; --accent2:#f97316;
-        --logo-size: 120px;           /* <— change this to resize the hero logo */
+        --logo-size: 120px;
       }
-      html, body, [class*="css"] {
-        font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif !important;
-        color: var(--text);
-      }
+      html, body, [class*="css"] { font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif !important; color: var(--text); }
       .main .block-container {max-width: 1080px; padding-top: .6rem; padding-bottom: 2rem;}
       body {
         background:
@@ -146,8 +143,7 @@ st.markdown(
 
       /* ---------------- Hero ---------------- */
       .cg-hero {
-        position: relative;
-        margin-top: 8px; padding: 30px 32px 32px 128px;
+        position: relative; margin-top: 8px; padding: 30px 32px 32px 128px;
         border-radius: 20px; border: 1px solid var(--muted2);
         background:
           radial-gradient(1200px 420px at 0% -10%, rgba(59,130,246,.16), transparent),
@@ -168,22 +164,16 @@ st.markdown(
                 background: rgba(15,23,42,.45); box-shadow: 0 10px 30px rgba(0,0,0,.25);}
 
       .cg-center {display:flex; justify-content:center; margin-top:.6rem;}
-      .pill {display:inline-block; padding:3px 12px; border-radius:999px; font-size:12px;
-             border:1px solid var(--muted); background: rgba(30,41,59,.55)}
+      .pill {display:inline-block; padding:3px 12px; border-radius:999px; font-size:12px; border:1px solid var(--muted); background: rgba(30,41,59,.55)}
       .ok   {background: rgba(16,185,129,.18); color:#a7f3d0; border-color: rgba(16,185,129,.35)}
       .err  {background: rgba(239,68,68,.18); color:#fecaca; border-color: rgba(239,68,68,.35)}
 
-      .stButton>button {
-        width: 100%; padding: 12px 14px; border-radius: 12px; font-weight: 700; border: 0; color: #fff;
-        background: linear-gradient(90deg, var(--accent), var(--accent2));
-        box-shadow: 0 8px 24px rgba(249,115,22,.35);
-      }
+      .stButton>button { width: 100%; padding: 12px 14px; border-radius: 12px; font-weight: 700; border: 0; color: #fff;
+        background: linear-gradient(90deg, var(--accent), var(--accent2)); box-shadow: 0 8px 24px rgba(249,115,22,.35); }
       .stButton>button:hover {filter: brightness(1.07)}
 
       [data-testid="stSidebar"] {min-width: 330px; max-width: 360px; border-right: 1px solid var(--muted2);}
-      [data-testid="stSidebar"] > div:first-child {
-        background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 60%, #182234 100%); color: var(--text);
-      }
+      [data-testid="stSidebar"] > div:first-child { background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 60%, #182234 100%); color: var(--text); }
       .sb-brand { font-weight: 700; font-size: 1.10rem; letter-spacing:.2px; margin: 12px 14px 10px 14px; }
 
       .sb-card { border:1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.04);
@@ -192,27 +182,8 @@ st.markdown(
       .sb-card ul, .sb-card ol {padding-left: 1.05rem; margin: .25rem 0 0 0;}
       .sb-card li {margin-bottom: 6px;}
 
-      .capstone-badge {
-        display:inline-flex; align-items:center; gap:8px; margin-bottom:10px;
-        background: linear-gradient(90deg, rgba(239,68,68,.18), rgba(249,115,22,.18));
-        border:1px solid rgba(249,115,22,.35); color:#ffd7c2; padding:6px 10px; border-radius:999px; font-size:12px;
-      }
-      .capstone-grid { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-      .cap-card { border:1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.03);
-                  border-radius: 12px; padding: 10px 12px; }
-      .cap-title {font-weight:700; margin-bottom:6px;}
-      .cap-kv {font-size: 13px; line-height: 1.25rem;}
-      .cap-name {font-weight:600;}
-      .cap-id {opacity:.85;}
-      .divider {height:1px; background:rgba(255,255,255,.06); margin:10px 0;}
-
-      .status-banner{
-        display:flex; align-items:center; justify-content:center;
-        gap:10px; height:52px; border-radius:12px; margin:12px 0;
-        font-weight:800; letter-spacing:.3px; text-transform:uppercase;
-        border:1px solid rgba(255,255,255,.10);
-        box-shadow: 0 6px 18px rgba(0,0,0,.25);
-      }
+      .status-banner{ display:flex; align-items:center; justify-content:center; gap:10px; height:52px; border-radius:12px; margin:12px 0;
+        font-weight:800; letter-spacing:.3px; text-transform:uppercase; border:1px solid rgba(255,255,255,.10); box-shadow: 0 6px 18px rgba(0,0,0,.25);}
       .status-dot{width:10px; height:10px; border-radius:50%; display:inline-block; box-shadow:0 0 0 3px rgba(255,255,255,.06) inset;}
       .status-ok{  background: linear-gradient(90deg, rgba(239,68,68,.22), rgba(249,115,22,.22)); color:#ffe5d5; }
       .status-safe{background: linear-gradient(90deg, rgba(16,185,129,.22), rgba(59,130,246,.22)); color:#dcfce7; }
@@ -223,20 +194,17 @@ st.markdown(
 
       /* --------- Custom progress bar (single gradient bar) ---------- */
       .cg-prog-label{margin:6px 4px 6px; font-weight:700; letter-spacing:.2px;}
-      .cg-prog-track{height:12px; border-radius:999px; background:rgba(255,255,255,.08);
-                      box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);}
+      .cg-prog-track{height:12px; border-radius:999px; background:rgba(255,255,255,.08); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);}
       .cg-prog-fill{height:12px; border-radius:999px; background:linear-gradient(90deg, var(--accent), var(--accent2));}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# ---------- safe wrapper for components.html ----------
+# ---------- safe wrapper ----------
 def _safe_html(html: str, *, height: int, key: str, scrolling: bool=False, width: int=0):
     try:
         components.html(html, height=height, key=key, scrolling=scrolling, width=width)
-    except TypeError:
-        pass
     except Exception:
         pass
 
@@ -281,8 +249,7 @@ with st.sidebar:
     st.markdown('<div class="sb-brand">🛡️ Crowd Guardian</div>', unsafe_allow_html=True)
     st.markdown(
         """
-        <div class="sb-card">
-          <b>Overview</b><br/>
+        <div class="sb-card"><b>Overview</b><br/>
           Detect potential stampede intervals in crowd videos by combining a CNN on grayscale frames
           with a head-count drop heuristic and event aggregation.
         </div>
@@ -291,7 +258,6 @@ with st.sidebar:
     st.markdown(
         """
         <div class="sb-card">
-          <span class="capstone-badge">🎓 Capstone-C Project • East West University</span>
           <div class="capstone-grid">
             <div class="cap-card">
               <div class="cap-title">Submitted By</div>
@@ -313,8 +279,6 @@ with st.sidebar:
               </div>
             </div>
           </div>
-          <div class="divider"></div>
-          <div class="sb-small">This application demonstrates ML-assisted analysis of crowd dynamics with visual evidence and interval summaries.</div>
         </div>
         """,
         unsafe_allow_html=True
@@ -337,13 +301,9 @@ with st.sidebar:
     )
 
 # =============================================================================
-# Hero (logo left, text centered)
+# Hero
 # =============================================================================
-if LOGO_B64:
-    logo_tag = f'<img class="cg-logo" alt="Crowd Guardian Logo" src="data:image/png;base64,{LOGO_B64}"/>'
-else:
-    logo_tag = ''
-
+logo_tag = f'<img class="cg-logo" alt="Crowd Guardian Logo" src="data:image/png;base64,{LOGO_B64}"/>' if LOGO_B64 else ''
 st.markdown(
     f'''
     <div class="cg-hero">
@@ -388,9 +348,7 @@ def sec_to_tc(sec: float) -> str:
     h = int(sec // 3600); m = int((sec % 3600) // 60); s = sec % 60
     return f"{h:02d}:{m:02d}:{s:06.3f}"
 
-def build_blob_detector(frame_w, frame_h, min_frac=MIN_FRAC, max_frac=MAX_FRAC,
-                        min_circ=MIN_CIRC, min_iner=MIN_INER, thresh_step=10):
-    """Consistent param name: min_iner (fixes NameError)."""
+def build_blob_detector(frame_w, frame_h, min_frac, max_frac, min_circ, min_iner, thresh_step=10):
     area = float(frame_w * frame_h)
     minArea = max(5.0, min_frac * area); maxArea = max(minArea + 1.0, max_frac * area)
     p = cv2.SimpleBlobDetector_Params()
@@ -454,7 +412,7 @@ def transcode_to_h264(src_path: str, dst_path: str, fps: float):
     ok = (proc.returncode == 0) and os.path.exists(dst_path) and os.path.getsize(dst_path) > 0
     return (dst_path if ok else src_path), ok, (proc.stderr or "")
 
-# =============== XAI: Grad-CAM + zone grid helpers ===========================
+# =============== XAI helpers ===========================
 def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
     import tensorflow as tf
 
@@ -520,11 +478,9 @@ def make_grid(W, H, rows=6, cols=6):
     return boxes, cell_w, cell_h
 
 def _show_image_resilient(path: str, caption: str) -> bool:
-    """Safely display image with sanitized caption."""
+    """Safely display image with sanitized caption (no 'risk ...')."""
     try:
-        # sanitize any '(risk ...)' that might sneak into caption strings
         caption = re.sub(r"\s*\(risk[^)]*\)\s*", "", caption, flags=re.IGNORECASE)
-
         data = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
         if data is None: data = cv2.imread(path, cv2.IMREAD_COLOR)
         if data is None: return False
@@ -548,7 +504,7 @@ def _show_image_resilient(path: str, caption: str) -> bool:
     except Exception:
         return False
 
-# -------- Flow baseline helper (stampede metrics) --------
+# -------- Flow baseline helper --------
 class _FlowBaseline:
     def __init__(self, eff_fps, base_sec=STAMP_BASELINE_SEC):
         n = max(1, int(round(base_sec * max(1.0, eff_fps))))
@@ -567,7 +523,7 @@ class _FlowBaseline:
         return max(s, 1e-6)
 
 # =============================================================================
-# Load model (silent) + status
+# Load model + status
 # =============================================================================
 model, load_err = None, None
 try:
@@ -609,30 +565,24 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
              background:linear-gradient(90deg, rgba(16,185,129,.18), rgba(239,68,68,.18));}
         </style>
         <script>
-          const canvas = document.getElementById('c');
-          const ctx = canvas.getContext('2d');
+          const canvas = document.getElementById('c'); const ctx = canvas.getContext('2d');
           function resize(){canvas.width=canvas.clientWidth; canvas.height=140;}
           window.addEventListener('resize', resize); resize();
           const confetti = [];
           function spawn(){for(let i=0;i<50;i++){confetti.push({
             x: Math.random()*canvas.width, y: -10 - Math.random()*30,
-            vx: (Math.random()-0.5)*1.5, vy: 1+Math.random()*2.5,
-            s: 2+Math.random()*3, a: Math.random()*Math.PI
+            vx: (Math.random()-0.5)*1.5, vy: 1+Math.random()*2.5, s: 2+Math.random()*3, a: Math.random()*Math.PI
           });}}
           spawn();
           function tick(){
             ctx.clearRect(0,0,canvas.width,canvas.height);
-            confetti.forEach(p=>{
-              p.x+=p.vx; p.y+=p.vy; p.a+=0.1;
+            confetti.forEach(p=>{ p.x+=p.vx; p.y+=p.vy; p.a+=0.1;
               ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.a);
               ctx.fillStyle = ['#ef4444','#f97316','#10b981','#60a5fa'][Math.floor(Math.random()*4)];
-              ctx.fillRect(-p.s/2, -p.s/2, p.s, p.s*2);
-              ctx.restore();
-            });
+              ctx.fillRect(-p.s/2, -p.s/2, p.s, p.s*2); ctx.restore(); });
             requestAnimationFrame(tick);
           }
-          tick();
-          setTimeout(()=>{spawn()}, 600);
+          tick(); setTimeout(()=>{spawn()}, 600);
         </script>
         """, height=160, key=f"confetti_{key_seed}")
 
@@ -729,9 +679,9 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
         for s in snapshots:
             path = s.get("path") or ""
             risk = float(s.get("risk_score", 0.0)) if s.get("risk_score", None) is not None else 0.0
-            # caption WITHOUT risk, and sanitized as a backstop
+            # caption WITHOUT any risk text
             caption = f"Event {s.get('event_id','?')} • frame {s.get('frame_index','?')} • {s.get('timecode','?')} • {s.get('zone_id','?')}"
-            caption = re.sub(r"\\s*\\(risk[^)]*\\)\\s*", "", caption, flags=re.IGNORECASE)
+            caption = re.sub(r"\s*\(risk[^)]*\)\s*", "", caption, flags=re.IGNORECASE)
 
             if isinstance(path, str) and os.path.exists(path) and os.path.getsize(path) > 0:
                 col1, col2 = st.columns([2,1])
@@ -782,7 +732,7 @@ uploaded = st.file_uploader(
 go = st.button("Analyze")
 
 # =============================================================================
-# Tracking utilities (for head-down)
+# Tracking utilities
 # =============================================================================
 def update_tracks(tracks, detections, radii, max_dist, window_cap):
     prev_pts = [t["pos"] for t in tracks]
@@ -800,11 +750,9 @@ def update_tracks(tracks, detections, radii, max_dist, window_cap):
     survivors = []
     matched_idx = {i for i,_ in matches}
     for k in range(len(tracks)):
-        if k in matched_idx:
-            survivors.append(tracks[k]); continue
+        if k in matched_idx: survivors.append(tracks[k]); continue
         t = tracks[k]; t["miss"] += 1
-        if t["miss"] <= 2:
-            survivors.append(t)
+        if t["miss"] <= 2: survivors.append(t)
 
     for j in un_curr:
         p = detections[j]; r = float(radii[j])
@@ -861,8 +809,7 @@ def analyze_video(
     )]
     events_rows = [("start_frame","end_frame","start_time_sec","end_time_sec","start_tc","end_tc","duration_sec")]
 
-    out_dir = os.path.join(os.getcwd(), "outputs")
-    os.makedirs(out_dir, exist_ok=True)
+    out_dir = os.path.join(os.getcwd(), "outputs"); os.makedirs(out_dir, exist_ok=True)
     base  = os.path.splitext(os.path.basename(video_path))[0]
     stamp = time.strftime("%Y%m%d-%H%M%S")
     labeled_path = ""  # snapshot-only mode
@@ -879,7 +826,7 @@ def analyze_video(
     snapshots = []
     current_best = None
 
-    # NEW: track heads over time for head-down
+    # track heads
     tracks = []
     window_frames = max(1, int(round(HEAD_DOWN_WINDOW_SEC * (fps/step))))
     streak_frames = max(2, int(round(HEAD_DOWN_MIN_STREAK_SEC * (fps/step))))
@@ -903,16 +850,14 @@ def analyze_video(
 
     render_prog(0.0, 0, total_steps)
 
-    # helper to save the best snapshot per event — NO drawing overlays
+    # helper to save the best snapshot per event — NO overlays
     def save_current_best():
         nonlocal current_best, snapshots
         if not current_best: return
         frame = current_best.pop("frame", None)
         if frame is None:
             current_best = None; return
-
         x0,y0,x1,y1 = current_best["x0"], current_best["y0"], current_best["x1"], current_best["y1"]
-
         snap_path = os.path.join(out_dir, f"{base}_{stamp}_event{current_best['event_id']}_snapshot.jpg")
         ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
         if ok:
@@ -938,44 +883,33 @@ def analyze_video(
             gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
             gray = np.ascontiguousarray(gray, dtype=np.uint8)
 
-            # --- STAMPEDE metrics (full-frame Farneback) ---
+            # --- STAMPEDE metrics ---
             flow_mean = flow_p95 = flow_coh = flow_div_out = flow_fast_frac = 0.0
             stampede_label = 0
             if prev_gray_for_metrics is not None and prev_gray_for_metrics.shape == gray.shape:
                 try:
                     flow_full = cv2.calcOpticalFlowFarneback(
-                        prev_gray_for_metrics, gray, None,
-                        0.5, 3, 15, 3, 5, 1.2, 0
+                        prev_gray_for_metrics, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0
                     )
                     fx = flow_full[..., 0].astype(np.float32)
                     fy = flow_full[..., 1].astype(np.float32)
-
-                    # ---- camera-shake compensation (remove global drift) ----
                     gx, gy = np.median(fx), np.median(fy)
-                    fx = fx - gx
-                    fy = fy - gy
-
+                    fx = fx - gx; fy = fy - gy
                     mag, ang = cv2.cartToPolar(fx, fy, angleInDegrees=False)
-
                     flow_mean = float(np.mean(mag))
                     flow_p95  = float(np.percentile(mag, 95))
-
                     w = mag + 1e-6
                     c = float(np.average(np.cos(ang), weights=w))
                     s = float(np.average(np.sin(ang), weights=w))
                     flow_coh = float(np.sqrt(c*c + s*s))
-
                     du_dx = cv2.Sobel(fx, cv2.CV_32F, 1, 0, ksize=3)
                     dv_dy = cv2.Sobel(fy, cv2.CV_32F, 0, 1, ksize=3)
                     div   = du_dx + dv_dy
                     move_mask = (mag > max(0.5, flow_baseline.mean)).astype(np.float32)
                     flow_div_out = float(np.sum(np.maximum(div, 0.0) * move_mask) / (np.sum(move_mask) + 1e-6))
-
-                    if not flow_baseline.ready:
-                        flow_baseline.update(flow_mean)
+                    if not flow_baseline.ready: flow_baseline.update(flow_mean)
                     fast_gate = flow_baseline.mean + FLOW_MEAN_Z * flow_baseline.std
                     flow_fast_frac = float(np.mean(mag > fast_gate)) if flow_baseline.ready else 0.0
-
                     cond_speed   = (flow_baseline.ready and flow_fast_frac >= FLOW_FAST_FRAC_MIN) \
                                    or (flow_p95 >= FLOW_P95_MIN) \
                                    or (flow_mean >= (flow_baseline.mean + FLOW_MEAN_Z*flow_baseline.std))
@@ -985,7 +919,7 @@ def analyze_video(
                     pass
             prev_gray_for_metrics = gray.copy()
 
-            # --- Heads detection & tracking for crush/surge (collapse) ---
+            # --- Heads detection & tracking ---
             head_pts, head_radii = detect_heads_gray(gray, detector)
             curr_count = len(head_pts)
             tracks = update_tracks(tracks, head_pts, head_radii, max_match_dist, window_frames)
@@ -1006,7 +940,7 @@ def analyze_video(
             final_crush = combine_labels(y_heads, y_cnn, COMBINE_RULE)
             final_stamp = combine_labels(stampede_label, y_cnn, COMBINE_RULE)
 
-            # -------------------- XAI computations (strict head+torso) --------------------
+            # -------------------- XAI computations --------------------
             any_head_and_torso_down = False
             ht_cand_count = 0
 
@@ -1020,12 +954,9 @@ def analyze_video(
                     else:
                         try:
                             flow = cv2.calcOpticalFlowFarneback(
-                                prev_gray_for_flow, gray, None,
-                                0.5, 3, 15, 3, 5, 1.2, 0
+                                prev_gray_for_flow, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0
                             )
-                            # remove global camera motion for torso metric
-                            vx = flow[..., 0]
-                            vy = flow[..., 1]
+                            vx = flow[..., 0]; vy = flow[..., 1]
                             gx, gy = np.median(vx), np.median(vy)
                             vy = vy - gy
                             down_mag = np.maximum(vy, 0.0).astype(np.float32)
@@ -1036,7 +967,6 @@ def analyze_video(
                     down_mag = np.zeros((H, W), dtype=np.float32)
 
                 scene_mean_flow = float(down_mag.mean()) + 1e-6
-
                 grid_boxes, cell_w, cell_h = make_grid(W, H, rows=GRID_ROWS, cols=GRID_COLS)
 
                 cell_records = []
@@ -1058,22 +988,19 @@ def analyze_video(
                         (x2, y2) = t2["pos"]; r2 = max(2.0, t2.get("r", r_head))
                         if abs(x2 - x) <= NEIGH_RADIUS_MULT * r_head and abs(y2 - y) <= 3.0 * r_head:
                             ys.append(y2)
-                    if len(ys) < 3:
-                        ys.extend([y] * (3 - len(ys)))
+                    if len(ys) < 3: ys.extend([y] * (3 - len(ys)))
                     ys.sort()
                     return ys[len(ys)//2]
 
                 # count heads per cell
                 for tinfo in tracks:
-                    (xh, yh) = tinfo["pos"]
-                    ci = cell_index_for(xh, yh)
+                    (xh, yh) = tinfo["pos"]; ci = cell_index_for(xh, yh)
                     cell_records[ci]["heads"] += 1
 
                 for tinfo in tracks:
                     (xh, yh) = tinfo["pos"]; rhead = max(2.0, tinfo.get("r", 6.0))
                     if len(tinfo["hist"]) < (window_frames + 1):
-                        tinfo["down_streak"] = 0
-                        continue
+                        tinfo["down_streak"] = 0; continue
 
                     y_then = tinfo["hist"][max(0, len(tinfo["hist"])-1-window_frames)][1]
                     dy = (yh - y_then)
@@ -1088,9 +1015,8 @@ def analyze_video(
                     torso_flow = float(down_mag[yt0:yt1, x0r:x1r].mean()) if yt1>yt0 else 0.0
                     head_flow  = float(down_mag[yh0:yh1, x0r:x1r].mean()) if yh1>yh0 else 0.0
                     torso_ratio = (torso_flow + 1e-6) / (head_flow + 1e-6)
-                    torso_scene = (torso_flow + 1e-6) / scene_mean_flow
+                    torso_scene = (torso_flow + 1e-6) / (scene_mean_flow)
 
-                    # STRONGER joint condition: head drop + relative drop + torso motion dominance
                     cond_drop  = (dy_norm_abs >= HEAD_DOWN_MIN_DY_FRAC) or (dy >= HEAD_DOWN_MIN_DY_RAD * rhead)
                     cond_rel   = (rel_drop_rad >= NEIGH_REL_MIN_RAD)
                     cond_torso = (torso_ratio >= TORSO_RATIO_MIN) and (torso_scene >= TORSO_SCENE_MIN)
@@ -1114,16 +1040,13 @@ def analyze_video(
                 for rec in cell_records:
                     (x0c,y0c,x1c,y1c) = (rec["x0"], rec["y0"], rec["x1"], rec["y1"])
                     rec["cnn_cell"] = float(cam_up[y0c:y1c, x0c:x1c].mean()) if cam_up is not None else 0.0
-
                     heads_in_cell = max(1, rec["heads"])
                     down_in_cell  = rec["cand"]
                     frac_down     = float(down_in_cell) / float(heads_in_cell)
-
                     penalty = 0.0
                     if frac_down > MASS_DROP_PENALTY_START:
                         scale = min(1.0, (frac_down - MASS_DROP_PENALTY_START) / (1.0 - MASS_DROP_PENALTY_START))
                         penalty = MASS_DROP_PENALTY_STRENGTH * scale
-
                     hd_score = (down_in_cell + rec["sum_dy_norm"] + 0.5*rec["max_dy_norm"])
                     flow_norm = (rec["torso_flow_accum"] / max(1, down_in_cell)) if down_in_cell>0 else 0.0
                     risk_raw = (W_HEADDOWN * hd_score) + (W_FLOW * flow_norm) + (W_CAM * rec["cnn_cell"])
@@ -1151,17 +1074,14 @@ def analyze_video(
                     events_z_rows.append({
                         "event_id": event_id, "frame": f, "timecode": sec_to_tc(f / fps), "zone_id": rc["cell_id"],
                         "x0": rc["x0"], "y0": rc["y0"], "x1": rc["x1"], "y1": rc["y1"],
-                        "risk_score": rc["risk"],
-                        "cand": rc["cand"],
-                        "sum_dy_norm": rc["sum_dy_norm"],
-                        "max_dy_norm": rc["max_dy_norm"],
-                        "heads_in_cell": rc["heads"],
-                        "cnn_cell": rc["cnn_cell"],
+                        "risk_score": rc["risk"], "cand": rc["cand"],
+                        "sum_dy_norm": rc["sum_dy_norm"], "max_dy_norm": rc["max_dy_norm"],
+                        "heads_in_cell": rc["heads"], "cnn_cell": rc["cnn_cell"],
                     })
 
             heads_torso_label = 1 if any_head_and_torso_down else 0
 
-            # ---------- FINAL LABEL LOGIC ----------
+            # ---------- FINAL LABEL ----------
             motion_ok = (flow_fast_frac >= FLOW_MIN_FAST_FRAC) and (flow_coh >= FLOW_MIN_COH)
             strict_crush = 1 if (ht_cand_count >= HT_MIN_CAND and y_cnn == 1 and motion_ok) else 0
 
@@ -1224,7 +1144,7 @@ def analyze_video(
                  "risk_score","cand","sum_dy_norm","max_dy_norm","heads_in_cell","cnn_cell"]
     )
     st.session_state["video_xai"] = {"events_zones": df_events_zones, "snapshots": snapshots}
-    return df_frames, df_events, ""  # snapshot mode => no video
+    return df_frames, df_events, ""  # snapshot mode
 
 # =============================================================================
 # Run
