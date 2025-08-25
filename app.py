@@ -16,6 +16,7 @@ import streamlit as st
 import altair as alt
 from scipy.optimize import linear_sum_assignment
 from collections import deque
+import re  # <-- added
 
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
@@ -562,6 +563,13 @@ class _FlowBaseline:
         return max(s, 1e-6)
 
 # =============================================================================
+# New helper to defensively strip "(risk ...)" from captions
+# =============================================================================
+def _strip_risk(text: str) -> str:
+    # remove any trailing " (risk ...)" if present
+    return re.sub(r"\s*\(risk[^)]*\)\s*$", "", text or "")
+
+# =============================================================================
 # Load model (silent) + status
 # =============================================================================
 model, load_err = None, None
@@ -723,9 +731,12 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
         snap_rows = []
         for s in snapshots:
             path = s.get("path") or ""
-            # keep risk in data for CSVs, but don't show it in the caption
-            risk = float(s.get("risk_score", 0.0)) if s.get("risk_score", None) is not None else 0.0
-            caption = f"Event {s.get('event_id','?')} • frame {s.get('frame_index','?')} • {s.get('timecode','?')} • {s.get('zone_id','?')}"
+            risk = float(s.get("risk_score", 0.0)) if s.get("risk_score", None) is not None else 0.0  # keep for CSV
+            # caption without risk, plus defensive strip
+            caption = _strip_risk(
+                f"Event {s.get('event_id','?')} • frame {s.get('frame_index','?')} "
+                f"• {s.get('timecode','?')} • {s.get('zone_id','?')}"
+            )
             if isinstance(path, str) and os.path.exists(path) and os.path.getsize(path) > 0:
                 col1, col2 = st.columns([2,1])
                 with col1:
