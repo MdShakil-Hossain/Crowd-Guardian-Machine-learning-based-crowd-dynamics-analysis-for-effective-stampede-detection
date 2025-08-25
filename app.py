@@ -335,6 +335,12 @@ with st.sidebar:
         help="Hybrid triggers on either running-panic (flow) or crush (head-drop) cues."
     )
 
+    # ---------- NEW: Reset button to clear persisted results ----------
+    if st.button("🔄 Reset results/cache"):
+        st.session_state.pop("video_results", None)
+        st.session_state.pop("video_xai", None)
+        st.rerun()
+
 # =============================================================================
 # Hero (logo left, text centered)
 # =============================================================================
@@ -724,7 +730,7 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
         for s in snapshots:
             path = s.get("path") or ""
             risk = float(s.get("risk_score", 0.0)) if s.get("risk_score", None) is not None else 0.0
-            # ----- UPDATED: display risk as probability (percentage) -----
+            # display risk as probability (percentage)
             risk_pct = max(0.0, min(1.0, risk)) * 100.0
             caption = f"Event {s.get('event_id','?')} • frame {s.get('frame_index','?')} • {s.get('timecode','?')} • {s.get('zone_id','?')} (risk {risk_pct:.1f}%)"
             if isinstance(path, str) and os.path.exists(path) and os.path.getsize(path) > 0:
@@ -1066,7 +1072,7 @@ def analyze_video(
                     cell_records[ci]["heads"] += 1
 
                 for tinfo in tracks:
-                    (xh, yh) = tinfo["pos"]; rhead = max(2.0, tinfo.get("r", 6.0))
+                    (xh, yh) = tinfo["pos"]); rhead = max(2.0, tinfo.get("r", 6.0))
                     if len(tinfo["hist"]) < (window_frames + 1):
                         tinfo["down_streak"] = 0
                         continue
@@ -1134,8 +1140,7 @@ def analyze_video(
 
                 # choose current_best (defer saving until event end)
                 if (current_best is None) or (best_risk > float(current_best["risk_score"])) or (current_best and current_best.get("event_id") != event_id):
-                    # --------------- UPDATED: compute event-level probability ---------------
-                    # Normalize flow features to [0,1]
+                    # Normalize flow features to [0,1] and compute event-level probability
                     flow_speed  = np.clip((flow_p95 - FLOW_P95_MIN) / max(1e-6, FLOW_P95_MIN), 0, 1)
                     flow_fast   = np.clip((flow_fast_frac - FLOW_MIN_FAST_FRAC) / max(1e-6, 1 - FLOW_MIN_FAST_FRAC), 0, 1)
                     flow_coh_n  = np.clip((flow_coh - FLOW_MIN_COH) / max(1e-6, 1 - FLOW_MIN_COH), 0, 1)
@@ -1144,12 +1149,16 @@ def analyze_video(
                     global_flow_prob = 0.35*flow_speed + 0.30*flow_fast + 0.25*flow_coh_n + 0.10*flow_div_n
                     ht_prob = np.clip(ht_cand_count / max(HT_MIN_CAND, 1), 0, 1)
                     event_prob = float(np.clip(0.50*global_flow_prob + 0.30*p_cnn + 0.20*ht_prob, 0, 1))
-                    # ------------------------------------------------------------------------
 
-                    # --------------- UPDATED: risk for snapshot uses event probability -----
+                    # risk for snapshot uses event probability (and best zone risk if any)
                     risk_for_snapshot = max(best_risk, event_prob)
+
+                    # ---------- NEW: ensure a reasonable floor when flow fires ----------
+                    if stampede_label == 1 and risk_for_snapshot < 0.65:
+                        risk_for_snapshot = 0.65
+                    # --------------------------------------------------------------------
+
                     zone_for_snapshot = best["cell_id"] if best_risk > 0 else "global"
-                    # ----------------------------------------------------------------------
 
                     current_best = {
                         "event_id": event_id,
