@@ -723,8 +723,9 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
         snap_rows = []
         for s in snapshots:
             path = s.get("path") or ""
+            # keep risk in data for CSVs, but don't show it in the caption
             risk = float(s.get("risk_score", 0.0)) if s.get("risk_score", None) is not None else 0.0
-            caption = f"Event {s.get('event_id','?')} • frame {s.get('frame_index','?')} • {s.get('timecode','?')} • {s.get('zone_id','?')} (risk {risk:.2f})"
+            caption = f"Event {s.get('event_id','?')} • frame {s.get('frame_index','?')} • {s.get('timecode','?')} • {s.get('zone_id','?')}"
             if isinstance(path, str) and os.path.exists(path) and os.path.getsize(path) > 0:
                 col1, col2 = st.columns([2,1])
                 with col1:
@@ -1244,7 +1245,3 @@ if go:
         st.session_state["detection_mode_label"] = detection_mode
         st.session_state["render_nonce"] = str(int(time.time() * 1e6))
         render_results(df_frames, df_events, labeled_path, key_seed=st.session_state["render_nonce"])
-
-
-
-
