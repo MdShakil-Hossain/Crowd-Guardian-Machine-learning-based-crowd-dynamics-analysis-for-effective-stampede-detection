@@ -4,6 +4,7 @@
 # **session_state persistence** so downloads don't "refresh away" your results.
 
 import os
+import re  # for caption sanitizing
 import cv2
 import time
 import tempfile
@@ -146,7 +147,7 @@ st.markdown(
       /* ---------------- Hero ---------------- */
       .cg-hero {
         position: relative;
-        margin-top: 8px; padding: 30px 32px 32px 128px;   /* left padding reserves space for logo */
+        margin-top: 8px; padding: 30px 32px 32px 128px;
         border-radius: 20px; border: 1px solid var(--muted2);
         background:
           radial-gradient(1200px 420px at 0% -10%, rgba(59,130,246,.16), transparent),
@@ -519,7 +520,11 @@ def make_grid(W, H, rows=6, cols=6):
     return boxes, cell_w, cell_h
 
 def _show_image_resilient(path: str, caption: str) -> bool:
+    """Safely display image with sanitized caption."""
     try:
+        # sanitize any '(risk ...)' that might sneak into caption strings
+        caption = re.sub(r"\s*\(risk[^)]*\)\s*", "", caption, flags=re.IGNORECASE)
+
         data = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
         if data is None: data = cv2.imread(path, cv2.IMREAD_COLOR)
         if data is None: return False
@@ -724,8 +729,10 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
         for s in snapshots:
             path = s.get("path") or ""
             risk = float(s.get("risk_score", 0.0)) if s.get("risk_score", None) is not None else 0.0
-            # Hide risk in the snapshot caption
+            # caption WITHOUT risk, and sanitized as a backstop
             caption = f"Event {s.get('event_id','?')} • frame {s.get('frame_index','?')} • {s.get('timecode','?')} • {s.get('zone_id','?')}"
+            caption = re.sub(r"\\s*\\(risk[^)]*\\)\\s*", "", caption, flags=re.IGNORECASE)
+
             if isinstance(path, str) and os.path.exists(path) and os.path.getsize(path) > 0:
                 col1, col2 = st.columns([2,1])
                 with col1:
@@ -879,7 +886,6 @@ def analyze_video(
 
     # --------- Custom progress (single gradient bar) ----------
     prog_box = st.empty()
-    status = st.empty()
     processed = 0
     total_steps = (N // step + 1) if N > 0 else 0
 
@@ -1199,7 +1205,6 @@ def analyze_video(
             if total_steps:
                 frac = min(1.0, processed/total_steps)
                 render_prog(frac, processed, total_steps)
-                status.write(f"Processed {processed}/{total_steps} sampled frames…")
         f += 1
 
     if in_event and start_f is not None:
@@ -1211,7 +1216,6 @@ def analyze_video(
     cap.release()
 
     render_prog(1.0, total_steps, total_steps)
-    status.write("Done.")
     df_frames = pd.DataFrame(frames_rows[1:], columns=frames_rows[0])
     df_events = pd.DataFrame(events_rows[1:], columns=events_rows[0])
 
