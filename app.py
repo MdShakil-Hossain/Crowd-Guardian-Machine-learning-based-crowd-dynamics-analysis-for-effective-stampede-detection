@@ -335,12 +335,6 @@ with st.sidebar:
         help="Hybrid triggers on either running-panic (flow) or crush (head-drop) cues."
     )
 
-    # ---------- NEW: Reset button to clear persisted results ----------
-    if st.button("🔄 Reset results/cache"):
-        st.session_state.pop("video_results", None)
-        st.session_state.pop("video_xai", None)
-        st.rerun()
-
 # =============================================================================
 # Hero (logo left, text centered)
 # =============================================================================
@@ -730,9 +724,7 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
         for s in snapshots:
             path = s.get("path") or ""
             risk = float(s.get("risk_score", 0.0)) if s.get("risk_score", None) is not None else 0.0
-            # display risk as probability (percentage)
-            risk_pct = max(0.0, min(1.0, risk)) * 100.0
-            caption = f"Event {s.get('event_id','?')} • frame {s.get('frame_index','?')} • {s.get('timecode','?')} • {s.get('zone_id','?')} (risk {risk_pct:.1f}%)"
+            caption = f"Event {s.get('event_id','?')} • frame {s.get('frame_index','?')} • {s.get('timecode','?')} • {s.get('zone_id','?')} (risk {risk:.2f})"
             if isinstance(path, str) and os.path.exists(path) and os.path.getsize(path) > 0:
                 col1, col2 = st.columns([2,1])
                 with col1:
@@ -1045,8 +1037,7 @@ def analyze_video(
                     cell_records.append({
                         "cell_id": cid, "x0": x0, "y0": y0, "x1": x1, "y1": y1,
                         "cand": 0, "sum_dy_norm": 0.0, "max_dy_norm": 0.0,
-                        "torso_flow_accum": 0.0, "cnn_cell": 0.0, "heads": 0,
-                        "risk": 0.0,
+                        "torso_flow_accum": 0.0, "cnn_cell": 0.0, "heads": 0
                     })
 
                 def cell_index_for(x, y):
@@ -1072,7 +1063,7 @@ def analyze_video(
                     cell_records[ci]["heads"] += 1
 
                 for tinfo in tracks:
-                    (xh, yh) = tinfo["pos"]); rhead = max(2.0, tinfo.get("r", 6.0))
+                    (xh, yh) = tinfo["pos"]; rhead = max(2.0, tinfo.get("r", 6.0))
                     if len(tinfo["hist"]) < (window_frames + 1):
                         tinfo["down_streak"] = 0
                         continue
@@ -1138,37 +1129,15 @@ def analyze_video(
                 bx0,by0,bx1,by1 = best["x0"], best["y0"], best["x1"], best["y1"]
                 best_risk = best["risk"]
 
-                # choose current_best (defer saving until event end)
                 if (current_best is None) or (best_risk > float(current_best["risk_score"])) or (current_best and current_best.get("event_id") != event_id):
-                    # Normalize flow features to [0,1] and compute event-level probability
-                    flow_speed  = np.clip((flow_p95 - FLOW_P95_MIN) / max(1e-6, FLOW_P95_MIN), 0, 1)
-                    flow_fast   = np.clip((flow_fast_frac - FLOW_MIN_FAST_FRAC) / max(1e-6, 1 - FLOW_MIN_FAST_FRAC), 0, 1)
-                    flow_coh_n  = np.clip((flow_coh - FLOW_MIN_COH) / max(1e-6, 1 - FLOW_MIN_COH), 0, 1)
-                    flow_div_n  = np.clip((flow_div_out - FLOW_DIV_MIN) / max(1e-6, 1 - FLOW_DIV_MIN), 0, 1)
-
-                    global_flow_prob = 0.35*flow_speed + 0.30*flow_fast + 0.25*flow_coh_n + 0.10*flow_div_n
-                    ht_prob = np.clip(ht_cand_count / max(HT_MIN_CAND, 1), 0, 1)
-                    event_prob = float(np.clip(0.50*global_flow_prob + 0.30*p_cnn + 0.20*ht_prob, 0, 1))
-
-                    # risk for snapshot uses event probability (and best zone risk if any)
-                    risk_for_snapshot = max(best_risk, event_prob)
-
-                    # ---------- NEW: ensure a reasonable floor when flow fires ----------
-                    if stampede_label == 1 and risk_for_snapshot < 0.65:
-                        risk_for_snapshot = 0.65
-                    # --------------------------------------------------------------------
-
-                    zone_for_snapshot = best["cell_id"] if best_risk > 0 else "global"
-
                     current_best = {
                         "event_id": event_id,
                         "frame": frame_bgr.copy(),
                         "frame_index": f,
                         "timecode": sec_to_tc(f / fps),
-                        "zone_id": zone_for_snapshot,
-                        "x0": bx0 if best_risk > 0 else 0, "y0": by0 if best_risk > 0 else 0,
-                        "x1": bx1 if best_risk > 0 else W, "y1": by1 if best_risk > 0 else H,
-                        "risk_score": risk_for_snapshot
+                        "zone_id": best["cell_id"],
+                        "x0": bx0, "y0": by0, "x1": bx1, "y1": by1,
+                        "risk_score": best_risk
                     }
 
                 for rc in cell_records:
@@ -1275,3 +1244,7 @@ if go:
         st.session_state["detection_mode_label"] = detection_mode
         st.session_state["render_nonce"] = str(int(time.time() * 1e6))
         render_results(df_frames, df_events, labeled_path, key_seed=st.session_state["render_nonce"])
+
+
+
+
