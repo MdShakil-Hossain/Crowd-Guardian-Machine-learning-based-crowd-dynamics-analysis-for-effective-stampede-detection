@@ -92,11 +92,16 @@ QUIET_COH_MAX        = 0.45
 W_HEADDOWN, W_FLOW, W_CAM = 0.60, 0.22, 0.18
 
 FLOW_ENABLED  = True
-SNAPSHOT_ONLY = True  # snapshots kept; we also output a labeled video
 
 # ---------- Snapshot overlay control ----------
 SHOW_ZONE_BOX = False
 STRICT_REQUIRE_HEAD_AND_TORSO = True
+
+# ---------- Labeled video overlay style ----------
+# Options: "reference" (clean bottom banner), "badge" (top-right), "border" (thin red border), "none"
+VIDEO_OVERLAY_STYLE = "reference"
+VIDEO_OVERLAY_COLOR = (20, 20, 20)  # BGR banner fill
+VIDEO_OVERLAY_TEXT  = "EVENT"
 
 # ---------- Model location ----------
 APP_DIR = Path(__file__).resolve().parent
@@ -296,6 +301,7 @@ with st.sidebar:
         f'<div class="sb-card sb-small">Environment: TF {tf_ver} • NumPy {np.__version__} • OpenCV {cv2.__version__}</div>',
         unsafe_allow_html=True,
     )
+
     detection_mode = st.selectbox(
         "Detection Mode",
         ["Hybrid (Default)", "Stampede (Running Panic)", "Crush/Surge (Compression)"],
@@ -419,6 +425,7 @@ def transcode_to_h264(src_path: str, dst_path: str, fps: float):
 # =============== XAI: Grad-CAM + zone grid helpers ===========================
 def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
     import tensorflow as tf
+
     def _select_score_vector(preds_any):
         t = preds_any
         if isinstance(t, dict): t = t[sorted(t.keys())[0]]
@@ -431,6 +438,7 @@ def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
             c = t.shape[-1]
             return tf.squeeze(t, axis=-1) if c == 1 else t[:, -1]
         return tf.reshape(t, (tf.shape(t)[0], -1))[:, -1]
+
     target_layer = None
     if conv_layer_name:
         try:
@@ -446,13 +454,16 @@ def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
             except Exception:
                 continue
     if target_layer is None: return None
+
     try:
         grad_model = tf.keras.Model(inputs=model.input, outputs=[target_layer.output, model.output])
     except Exception:
         grad_model = tf.keras.Model(inputs=model.inputs, outputs=[target_layer.output, model.outputs])
+
     with tf.GradientTape() as tape:
         conv_out, preds = grad_model(x_100x100x1, training=False)
         score_vec = _select_score_vector(preds)
+
     grads = tape.gradient(score_vec, conv_out)
     if grads is None: return None
     weights = tf.reduce_mean(grads, axis=(1, 2), keepdims=True)
@@ -726,18 +737,25 @@ go = st.button("Analyze")
 def update_tracks(tracks, detections, radii, max_dist, window_cap):
     prev_pts = [t["pos"] for t in tracks]
     matches, un_prev, un_curr = assign_matches(prev_pts, detections, max_dist)
+
     for i_prev, j_curr in matches:
-        t = tracks[i_prev]; p = detections[j_curr]; r = float(radii[j_curr])
+        t = tracks[i_prev]
+        p = detections[j_curr]; r = float(radii[j_curr])
         t["pos"], t["r"], t["miss"] = p, r, 0
         t["hist"].append((p[0], p[1], r))
         if len(t["hist"]) > window_cap + 2:
-            while len(t["hist"]) > window_cap + 2: t["hist"].popleft()
+            while len(t["hist"]) > window_cap + 2:
+                t["hist"].popleft()
+
     survivors = []
     matched_idx = {i for i,_ in matches}
     for k in range(len(tracks)):
-        if k in matched_idx: survivors.append(tracks[k]); continue
+        if k in matched_idx:
+            survivors.append(tracks[k]); continue
         t = tracks[k]; t["miss"] += 1
-        if t["miss"] <= 2: survivors.append(t)
+        if t["miss"] <= 2:
+            survivors.append(t)
+
     for j in un_curr:
         p = detections[j]; r = float(radii[j])
         survivors.append({
@@ -745,6 +763,58 @@ def update_tracks(tracks, detections, radii, max_dist, window_cap):
             "hist": deque([(p[0], p[1], r)], maxlen=window_cap+2)
         })
     return survivors
+
+# =============================================================================
+# Video overlay (no risk / no %)
+# =============================================================================
+def mark_event_frame(frame):
+    """
+    Draw minimal overlay ONLY during detected frames.
+    Styles:
+      - "reference": bottom semi-opaque banner with 'EVENT'
+      - "badge": small rounded badge top-right
+      - "border": thin red border
+      - "none": no overlay
+    """
+    style = (VIDEO_OVERLAY_STYLE or "reference").lower()
+    h, w = frame.shape[:2]
+
+    if style == "none":
+        return
+
+    if style == "border":
+        color = (0, 0, 255)
+        thickness = max(2, int(round(0.004 * max(h, w))))
+        cv2.rectangle(frame, (0, 0), (w - 1, h - 1), color, thickness)
+        return
+
+    if style == "badge":
+        txt = VIDEO_OVERLAY_TEXT
+        fs = 0.6; th=2
+        (tw, th_txt), _ = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, fs, th)
+        pad = 10
+        x1 = w - pad
+        y1 = pad + th_txt + 2
+        x0 = x1 - (tw + 2*pad)
+        y0 = y1 - (th_txt + 2*pad//3)
+        cv2.rectangle(frame, (x0, y0), (x1, y1), (20,20,20), -1)
+        cv2.putText(frame, txt, (x0 + pad, y1 - 6), cv2.FONT_HERSHEY_SIMPLEX, fs, (255,255,255), th, cv2.LINE_AA)
+        return
+
+    # "reference" banner
+    txt_left = VIDEO_OVERLAY_TEXT
+    fs = 0.75; th=2
+    (twL, thL), _ = cv2.getTextSize(txt_left, cv2.FONT_HERSHEY_SIMPLEX, fs, th)
+
+    pad_y = max(10, h//120)
+    pad_x = max(12, w//160)
+    bar_h = thL + pad_y*2 + 2
+    y0 = h - bar_h
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (0, y0), (w, h), VIDEO_OVERLAY_COLOR, -1)
+    alpha = 0.55
+    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+    cv2.putText(frame, txt_left, (pad_x, h - pad_y), cv2.FONT_HERSHEY_SIMPLEX, fs, (255,255,255), th, cv2.LINE_AA)
 
 # =============================================================================
 # Core analysis
@@ -811,7 +881,6 @@ def analyze_video(
 
     writer = cv2.VideoWriter(tmp_labeled_path, fourcc, eff_fps, (OUT_W, OUT_H))
     if not writer.isOpened():
-        # fallback codecs
         alt_fourcc = cv2.VideoWriter_fourcc(*("XVID" if tmp_labeled_path.endswith(".avi") else "avc1"))
         writer = cv2.VideoWriter(tmp_labeled_path, alt_fourcc, eff_fps, (OUT_W, OUT_H))
         if not writer.isOpened():
@@ -850,7 +919,6 @@ def analyze_video(
         )
     render_prog(0.0, 0, total_steps)
 
-    # helper to save best snapshot per event (no overlays)
     def save_current_best():
         nonlocal current_best, snapshots
         if not current_best: return
@@ -873,19 +941,45 @@ def analyze_video(
             })
         current_best = None
 
+    # video overlay helper
     def mark_event_frame(frame):
-        color = (0, 0, 255)
+        style = (VIDEO_OVERLAY_STYLE or "reference").lower()
         h, w = frame.shape[:2]
-        thickness = max(2, int(round(0.004 * max(h, w))))
-        cv2.rectangle(frame, (0, 0), (w - 1, h - 1), color, thickness)
-        txt = "EVENT"; fs = 0.6
-        (tw, th), bl = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, fs, 2)
-        pad = 8; x0, y0 = pad, pad + th
-        cv2.rectangle(frame, (x0 - pad, y0 - th - pad//2), (x0 - pad + tw + 2*pad, y0 + pad//2),
-                      (20, 20, 20), -1)
-        cv2.putText(frame, txt, (x0, y0), cv2.FONT_HERSHEY_SIMPLEX, fs, (255, 255, 255), 2, cv2.LINE_AA)
+        if style == "none":
+            return
+        if style == "border":
+            color = (0, 0, 255)
+            thickness = max(2, int(round(0.004 * max(h, w))))
+            cv2.rectangle(frame, (0, 0), (w - 1, h - 1), color, thickness)
+            return
+        if style == "badge":
+            txt = VIDEO_OVERLAY_TEXT
+            fs = 0.6; th=2
+            (tw, th_txt), _ = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, fs, th)
+            pad = 10
+            x1 = w - pad
+            y1 = pad + th_txt + 2
+            x0 = x1 - (tw + 2*pad)
+            y0 = y1 - (th_txt + 2*pad//3)
+            cv2.rectangle(frame, (x0, y0), (x1, y1), (20,20,20), -1)
+            cv2.putText(frame, txt, (x0 + pad, y1 - 6), cv2.FONT_HERSHEY_SIMPLEX, fs, (255,255,255), th, cv2.LINE_AA)
+            return
+        # reference banner
+        txt_left = VIDEO_OVERLAY_TEXT
+        fs = 0.75; th=2
+        (twL, thL), _ = cv2.getTextSize(txt_left, cv2.FONT_HERSHEY_SIMPLEX, fs, th)
+        pad_y = max(10, h//120)
+        pad_x = max(12, w//160)
+        bar_h = thL + pad_y*2 + 2
+        y0 = h - bar_h
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (0, y0), (w, h), VIDEO_OVERLAY_COLOR, -1)
+        alpha = 0.55
+        cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+        cv2.putText(frame, txt_left, (pad_x, h - pad_y), cv2.FONT_HERSHEY_SIMPLEX, fs, (255,255,255), th, cv2.LINE_AA)
 
     f = 0
+    in_event = False
     while True:
         ok, frame_bgr = cap.read()
         if not ok: break
@@ -897,23 +991,32 @@ def analyze_video(
             stampede_label = 0
             if prev_gray_for_metrics is not None and prev_gray_for_metrics.shape == gray.shape:
                 try:
-                    flow_full = cv2.calcOpticalFlowFarneback(prev_gray_for_metrics, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
-                    fx = flow_full[..., 0].astype(np.float32); fy = flow_full[..., 1].astype(np.float32)
-                    gx, gy = np.median(fx), np.median(fy); fx -= gx; fy -= gy
+                    flow_full = cv2.calcOpticalFlowFarneback(
+                        prev_gray_for_metrics, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0
+                    )
+                    fx = flow_full[..., 0].astype(np.float32)
+                    fy = flow_full[..., 1].astype(np.float32)
+                    gx, gy = np.median(fx), np.median(fy)
+                    fx = fx - gx; fy = fy - gy
                     mag, ang = cv2.cartToPolar(fx, fy, angleInDegrees=False)
-                    flow_mean = float(np.mean(mag)); flow_p95 = float(np.percentile(mag, 95))
-                    w = mag + 1e-6; c = float(np.average(np.cos(ang), weights=w)); s = float(np.average(np.sin(ang), weights=w))
+                    flow_mean = float(np.mean(mag))
+                    flow_p95  = float(np.percentile(mag, 95))
+                    w = mag + 1e-6
+                    c = float(np.average(np.cos(ang), weights=w))
+                    s = float(np.average(np.sin(ang), weights=w))
                     flow_coh = float(np.sqrt(c*c + s*s))
-                    du_dx = cv2.Sobel(fx, cv2.CV_32F, 1, 0, ksize=3); dv_dy = cv2.Sobel(fy, cv2.CV_32F, 0, 1, ksize=3)
-                    div = du_dx + dv_dy
+                    du_dx = cv2.Sobel(fx, cv2.CV_32F, 1, 0, ksize=3)
+                    dv_dy = cv2.Sobel(fy, cv2.CV_32F, 0, 1, ksize=3)
+                    div   = du_dx + dv_dy
                     move_mask = (mag > max(0.5, flow_baseline.mean)).astype(np.float32)
                     flow_div_out = float(np.sum(np.maximum(div, 0.0) * move_mask) / (np.sum(move_mask) + 1e-6))
-                    if not flow_baseline.ready: flow_baseline.update(flow_mean)
+                    if not flow_baseline.ready:
+                        flow_baseline.update(flow_mean)
                     fast_gate = flow_baseline.mean + FLOW_MEAN_Z * flow_baseline.std
                     flow_fast_frac = float(np.mean(mag > fast_gate)) if flow_baseline.ready else 0.0
-                    cond_speed = (flow_baseline.ready and flow_fast_frac >= FLOW_FAST_FRAC_MIN) \
-                                 or (flow_p95 >= FLOW_P95_MIN) \
-                                 or (flow_mean >= (flow_baseline.mean + FLOW_MEAN_Z*flow_baseline.std))
+                    cond_speed   = (flow_baseline.ready and flow_fast_frac >= FLOW_FAST_FRAC_MIN) \
+                                   or (flow_p95 >= FLOW_P95_MIN) \
+                                   or (flow_mean >= (flow_baseline.mean + FLOW_MEAN_Z*flow_baseline.std))
                     cond_pattern = (flow_coh >= FLOW_COH_MIN) or (flow_div_out >= FLOW_DIV_MIN)
                     stampede_label = 1 if (cond_speed and cond_pattern) else 0
                 except cv2.error:
@@ -935,123 +1038,161 @@ def analyze_video(
             p_cnn = float(model.predict(x, verbose=0)[0][0])
             y_cnn = 1 if p_cnn >= cnn_threshold else 0
 
-            final_crush = 1  # not used directly; XAI below sets strict_crush
-            final_stamp = 1 if (stampede_label and y_cnn) else 0
+            any_head_and_torso_down = False
+            ht_cand_count = 0
 
-            any_head_and_torso_down = False; ht_cand_count = 0
-            if XAI_ENABLED:
-                cam_small = gradcam_heatmap(model, x)
-                cam_up = upscale_cam(cam_small, W, H) if cam_small is not None else None
-                if FLOW_ENABLED:
-                    if prev_gray_for_flow is None or prev_gray_for_flow.shape != gray.shape:
-                        down_mag = np.zeros((H, W), dtype=np.float32)
-                    else:
-                        try:
-                            flow = cv2.calcOpticalFlowFarneback(prev_gray_for_flow, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
-                            vx = flow[..., 0]; vy = flow[..., 1]
-                            gx, gy = np.median(vx), np.median(vy); vy = vy - gy
-                            down_mag = np.maximum(vy, 0.0).astype(np.float32)
-                        except cv2.error:
-                            down_mag = np.zeros((H, W), dtype=np.float32)
-                    prev_gray_for_flow = gray.copy()
-                else:
+            # XAI signals
+            cam_small = gradcam_heatmap(model, x) if XAI_ENABLED else None
+            cam_up = upscale_cam(cam_small, W, H) if cam_small is not None else None
+
+            if FLOW_ENABLED:
+                if prev_gray_for_flow is None or prev_gray_for_flow.shape != gray.shape:
                     down_mag = np.zeros((H, W), dtype=np.float32)
-                scene_mean_flow = float(down_mag.mean()) + 1e-6
-                grid_boxes, cell_w, cell_h = make_grid(W, H, rows=GRID_ROWS, cols=GRID_COLS)
-                cell_records = []
-                for ((x0,y0,x1,y1), cid) in grid_boxes:
-                    cell_records.append({"cell_id": cid,"x0":x0,"y0":y0,"x1":x1,"y1":y1,
-                                         "cand":0,"sum_dy_norm":0.0,"max_dy_norm":0.0,
-                                         "torso_flow_accum":0.0,"cnn_cell":0.0,"heads":0})
-                def cell_index_for(x, y):
-                    c = min(GRID_COLS-1, max(0, int(x // max(1, cell_w))))
-                    r = min(GRID_ROWS-1, max(0, int(y // max(1, cell_h))))
-                    return r*GRID_COLS + c
-                for tinfo in tracks:
-                    (xh, yh) = tinfo["pos"]; ci = cell_index_for(xh, yh)
-                    cell_records[ci]["heads"] += 1
-                def neighbors_y_median(x, y, r_head):
-                    ys = []
-                    for t2 in tracks:
-                        (x2, y2) = t2["pos"]; r2 = max(2.0, t2.get("r", r_head))
-                        if abs(x2 - x) <= 3.0 * r_head and abs(y2 - y) <= 3.0 * r_head:
-                            ys.append(y2)
-                    if len(ys) < 3: ys.extend([y] * (3 - len(ys)))
-                    ys.sort(); return ys[len(ys)//2]
-                for tinfo in tracks:
-                    (xh, yh) = tinfo["pos"]; rhead = max(2.0, tinfo.get("r", 6.0))
-                    if len(tinfo["hist"]) < (window_frames + 1):
-                        tinfo["down_streak"] = 0; continue
-                    y_then = tinfo["hist"][max(0, len(tinfo["hist"])-1-window_frames)][1]
-                    dy = (yh - y_then); dy_norm_abs = float(dy) / max(1.0, float(H))
-                    y_med = neighbors_y_median(xh, yh, rhead); rel_drop_rad = (yh - y_med) / rhead
-                    x0r = int(max(0, xh - 1.2*rhead)); x1r = int(min(W, xh + 1.2*rhead))
-                    yh0 = int(max(0, yh - 1.0*rhead)); yh1 = int(min(H, yh + 0.5*rhead))
-                    yt0 = int(max(0, yh + 0.5*rhead)); yt1 = int(min(H, yh + 3.0*rhead))
-                    torso_flow = float(down_mag[yt0:yt1, x0r:x1r].mean()) if yt1>yt0 else 0.0
-                    head_flow  = float(down_mag[yh0:yh1, x0r:x1r].mean()) if yh1>yh0 else 0.0
-                    torso_ratio = (torso_flow + 1e-6) / (head_flow + 1e-6)
-                    torso_scene = (torso_flow + 1e-6) / (scene_mean_flow + 1e-6)
-                    cond_drop  = (dy_norm_abs >= 0.06) or (dy >= 1.20 * rhead)
-                    cond_rel   = (rel_drop_rad >= 1.20)
-                    cond_torso = (torso_ratio >= 1.50) and (torso_scene >= 1.40)
-                    if cond_drop and cond_rel and cond_torso:
-                        tinfo["down_streak"] = min(streak_frames+3, tinfo.get("down_streak", 0) + 1)
-                    else:
-                        tinfo["down_streak"] = max(0, tinfo.get("down_streak", 0) - 1)
-                    if tinfo["down_streak"] >= streak_frames:
-                        any_head_and_torso_down = True; ht_cand_count += 1
-                        ci = cell_index_for(xh, yh); rec = cell_records[ci]
-                        rec["cand"] += 1; rec["sum_dy_norm"] += dy_norm_abs
-                        rec["max_dy_norm"] = max(rec["max_dy_norm"], dy_norm_abs)
-                        rec["torso_flow_accum"] += (torso_flow + 1e-6) / (scene_mean_flow + 1e-6)
-                for rec in cell_records:
-                    (x0c,y0c,x1c,y1c) = (rec["x0"], rec["y0"], rec["x1"], rec["y1"])
-                    rec["cnn_cell"] = float(cam_up[y0c:y1c, x0c:x1c].mean()) if cam_up is not None else 0.0
-                    heads_in_cell = max(1, rec["heads"]); down_in_cell = rec["cand"]
-                    frac_down = float(down_in_cell) / float(heads_in_cell)
-                    penalty = 0.0
-                    if frac_down > 0.88:
-                        scale = min(1.0, (frac_down - 0.88) / (1.0 - 0.88))
-                        penalty = 0.25 * scale
-                    hd_score = (down_in_cell + rec["sum_dy_norm"] + 0.5*rec["max_dy_norm"])
-                    flow_norm = (rec["torso_flow_accum"] / max(1, down_in_cell)) if down_in_cell>0 else 0.0
-                    risk_raw = (W_HEADDOWN * hd_score) + (W_FLOW * flow_norm) + (W_CAM * rec["cnn_cell"])
-                    rec["risk"] = risk_raw * (1.0 - penalty)
-                cands = [i for i,rc in enumerate(cell_records) if rc["cand"] > 0]
-                best_i = max(cands, key=lambda i: cell_records[i]["risk"]) if cands else \
-                         max(range(len(cell_records)), key=lambda i: cell_records[i]["risk"])
-                best = cell_records[best_i]; bx0,by0,bx1,by1 = best["x0"], best["y0"], best["x1"], best["y1"]
-                best_risk = best["risk"]
-                if (current_best is None) or (best_risk > float(current_best["risk_score"])) or (current_best and current_best.get("event_id") != event_id):
-                    current_best = {"event_id": event_id, "frame": frame_bgr.copy(), "frame_index": f,
-                                    "timecode": sec_to_tc(f / fps), "zone_id": best["cell_id"],
-                                    "x0": bx0, "y0": by0, "x1": bx1, "y1": by1, "risk_score": best_risk}
-                for rc in cell_records:
-                    events_z_rows.append({"event_id": event_id, "frame": f, "timecode": sec_to_tc(f / fps), "zone_id": rc["cell_id"],
-                                          "x0": rc["x0"], "y0": rc["y0"], "x1": rc["x1"], "y1": rc["y1"],
-                                          "risk_score": rc["risk"], "cand": rc["cand"], "sum_dy_norm": rc["sum_dy_norm"],
-                                          "max_dy_norm": rc["max_dy_norm"], "heads_in_cell": rc["heads"], "cnn_cell": rc["cnn_cell"]})
+                else:
+                    try:
+                        flow = cv2.calcOpticalFlowFarneback(prev_gray_for_flow, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+                        vx = flow[..., 0]; vy = flow[..., 1]
+                        gx, gy = np.median(vx), np.median(vy); vy = vy - gy
+                        down_mag = np.maximum(vy, 0.0).astype(np.float32)
+                    except cv2.error:
+                        down_mag = np.zeros((H, W), dtype=np.float32)
+                prev_gray_for_flow = gray.copy()
+            else:
+                down_mag = np.zeros((H, W), dtype=np.float32)
+
+            scene_mean_flow = float(down_mag.mean()) + 1e-6
+            grid_boxes, cell_w, cell_h = make_grid(W, H, rows=GRID_ROWS, cols=GRID_COLS)
+
+            cell_records = []
+            for ((x0,y0,x1,y1), cid) in grid_boxes:
+                cell_records.append({"cell_id": cid,"x0": x0,"y0": y0,"x1": x1,"y1": y1,
+                                     "cand": 0,"sum_dy_norm": 0.0,"max_dy_norm": 0.0,
+                                     "torso_flow_accum": 0.0,"cnn_cell": 0.0,"heads": 0})
+
+            def cell_index_for(x, y):
+                c = min(GRID_COLS-1, max(0, int(x // max(1, cell_w))))
+                r = min(GRID_ROWS-1, max(0, int(y // max(1, cell_h))))
+                return r*GRID_COLS + c
+
+            for tinfo in tracks:
+                (xh, yh) = tinfo["pos"]; ci = cell_index_for(xh, yh)
+                cell_records[ci]["heads"] += 1
+
+            def neighbors_y_median(x, y, r_head):
+                ys = []
+                for t2 in tracks:
+                    (x2, y2) = t2["pos"]; r2 = max(2.0, t2.get("r", r_head))
+                    if abs(x2 - x) <= 3.0 * r_head and abs(y2 - y) <= 3.0 * r_head:
+                        ys.append(y2)
+                if len(ys) < 3: ys.extend([y] * (3 - len(ys)))
+                ys.sort(); return ys[len(ys)//2]
+
+            for tinfo in tracks:
+                (xh, yh) = tinfo["pos"]; rhead = max(2.0, tinfo.get("r", 6.0))
+                if len(tinfo["hist"]) < (window_frames + 1):
+                    tinfo["down_streak"] = 0; continue
+                y_then = tinfo["hist"][max(0, len(tinfo["hist"])-1-window_frames)][1]
+                dy = (yh - y_then); dy_norm_abs = float(dy) / max(1.0, float(H))
+                y_med = neighbors_y_median(xh, yh, rhead); rel_drop_rad = (yh - y_med) / rhead
+
+                x0r = int(max(0, xh - 1.2*rhead)); x1r = int(min(W, xh + 1.2*rhead))
+                yh0 = int(max(0, yh - 1.0*rhead)); yh1 = int(min(H, yh + 0.5*rhead))
+                yt0 = int(max(0, yh + 0.5*rhead)); yt1 = int(min(H, yh + 3.0*rhead))
+                torso_flow = float(down_mag[yt0:yt1, x0r:x1r].mean()) if yt1>yt0 else 0.0
+                head_flow  = float(down_mag[yh0:yh1, x0r:x1r].mean()) if yh1>yh0 else 0.0
+                torso_ratio = (torso_flow + 1e-6) / (head_flow + 1e-6)
+                torso_scene = (torso_flow + 1e-6) / (scene_mean_flow + 1e-6)
+
+                cond_drop  = (dy_norm_abs >= 0.06) or (dy >= 1.20 * rhead)
+                cond_rel   = (rel_drop_rad >= 1.20)
+                cond_torso = (torso_ratio >= 1.50) and (torso_scene >= 1.40)
+
+                if cond_drop and cond_rel and cond_torso:
+                    tinfo["down_streak"] = min(streak_frames+3, tinfo.get("down_streak", 0) + 1)
+                else:
+                    tinfo["down_streak"] = max(0, tinfo.get("down_streak", 0) - 1)
+
+                if tinfo["down_streak"] >= streak_frames:
+                    any_head_and_torso_down = True; ht_cand_count += 1
+                    ci = cell_index_for(xh, yh); rec = cell_records[ci]
+                    rec["cand"] += 1
+                    rec["sum_dy_norm"] += dy_norm_abs
+                    rec["max_dy_norm"] = max(rec["max_dy_norm"], dy_norm_abs)
+                    rec["torso_flow_accum"] += (torso_flow + 1e-6) / (scene_mean_flow + 1e-6)
+
+            for rec in cell_records:
+                (x0c,y0c,x1c,y1c) = (rec["x0"], rec["y0"], rec["x1"], rec["y1"])
+                rec["cnn_cell"] = float(cam_up[y0c:y1c, x0c:x1c].mean()) if cam_up is not None else 0.0
+                heads_in_cell = max(1, rec["heads"])
+                down_in_cell  = rec["cand"]
+                frac_down     = float(down_in_cell) / float(heads_in_cell)
+
+                penalty = 0.0
+                if frac_down > MASS_DROP_PENALTY_START:
+                    scale = min(1.0, (frac_down - MASS_DROP_PENALTY_START) / (1.0 - MASS_DROP_PENALTY_START))
+                    penalty = MASS_DROP_PENALTY_STRENGTH * scale
+
+                hd_score = (down_in_cell + rec["sum_dy_norm"] + 0.5*rec["max_dy_norm"])
+                flow_norm = (rec["torso_flow_accum"] / max(1, down_in_cell)) if down_in_cell>0 else 0.0
+                risk_raw = (W_HEADDOWN * hd_score) + (W_FLOW * flow_norm) + (W_CAM * rec["cnn_cell"])
+                rec["risk"] = risk_raw * (1.0 - penalty)
+
+            cands = [i for i,rc in enumerate(cell_records) if rc["cand"] > 0]
+            best_i = max(cands, key=lambda i: cell_records[i]["risk"]) if cands else \
+                     max(range(len(cell_records)), key=lambda i: cell_records[i]["risk"])
+            best = cell_records[best_i]
+            bx0,by0,bx1,by1 = best["x0"], best["y0"], best["x1"], best["y1"]
+            best_risk = best["risk"]
+
+            if (current_best is None) or (best_risk > float(current_best["risk_score"])) or (current_best and current_best.get("event_id") != event_id):
+                current_best = {
+                    "event_id": event_id,
+                    "frame": frame_bgr.copy(),
+                    "frame_index": f,
+                    "timecode": sec_to_tc(f / fps),
+                    "zone_id": best["cell_id"],
+                    "x0": bx0, "y0": by0, "x1": bx1, "y1": by1,
+                    "risk_score": best_risk
+                }
+
+            for rc in cell_records:
+                events_z_rows.append({
+                    "event_id": event_id, "frame": f, "timecode": sec_to_tc(f / fps), "zone_id": rc["cell_id"],
+                    "x0": rc["x0"], "y0": rc["y0"], "x1": rc["x1"], "y1": rc["y1"],
+                    "risk_score": rc["risk"], "cand": rc["cand"],
+                    "sum_dy_norm": rc["sum_dy_norm"], "max_dy_norm": rc["max_dy_norm"],
+                    "heads_in_cell": rc["heads"], "cnn_cell": rc["cnn_cell"],
+                })
+
             heads_torso_label = 1 if any_head_and_torso_down else 0
-            motion_ok = (flow_fast_frac >= 0.18) and (flow_coh >= 0.60)
-            strict_crush = 1 if (ht_cand_count >= 4 and y_cnn == 1 and motion_ok) else 0
+
+            motion_ok = (flow_fast_frac >= FLOW_MIN_FAST_FRAC) and (flow_coh >= FLOW_MIN_COH)
+            strict_crush = 1 if (ht_cand_count >= HT_MIN_CAND and y_cnn == 1 and motion_ok) else 0
+
             mode = (detection_mode or "Hybrid").lower()
             if "stampede" in mode:
-                final_label = final_stamp
+                final_label = 1 if (stampede_label and y_cnn) else 0
             elif "crush" in mode or "surge" in mode:
                 final_label = strict_crush
             else:
-                final_label = 1 if (final_stamp == 1 or strict_crush == 1) else 0
+                final_label = 1 if ((stampede_label and y_cnn) or strict_crush) else 0
+
             if QUIET_SCENE_SUPPRESS and final_label == 1:
-                quiet_scene = (flow_p95 < 1.20) and (flow_fast_frac < 0.08) and (flow_coh < 0.45)
-                if quiet_scene and strict_crush == 1 and final_stamp == 0:
+                quiet_scene = (flow_p95 < QUIET_P95_MAX) and (flow_fast_frac < QUIET_FAST_FRAC_MAX) and (flow_coh < QUIET_COH_MAX)
+                if quiet_scene and strict_crush == 1 and stampede_label == 0:
                     final_label = 0
 
             t = f / fps; tc = sec_to_tc(t)
-            frames_rows.append((f, t, tc, curr_count, int(delta), p_cnn, y_cnn, y_heads, heads_torso_label,
-                                flow_mean, flow_p95, flow_coh, flow_div_out, flow_fast_frac, stampede_label, final_label))
+            frames_rows.append((
+                f, t, tc,
+                curr_count, int(delta),
+                p_cnn, y_cnn, y_heads, heads_torso_label,
+                flow_mean, flow_p95, flow_coh, flow_div_out, flow_fast_frac,
+                stampede_label,
+                final_label
+            ))
 
-            # ----- write labeled video frame (raw + minimal marker during events)
+            # ----- write labeled frame (raw, plus overlay during events)
             if writer is not None:
                 frame_to_write = frame_bgr.copy()
                 if final_label == 1:
@@ -1061,12 +1202,15 @@ def analyze_video(
                 writer.write(frame_to_write)
 
             if final_label == 1 and not in_event:
-                in_event, start_f, start_t = True, f, t; event_id += 1; current_best = None
+                in_event, start_f, start_t = True, f, t
+                event_id += 1
+                current_best = None
             elif final_label == 0 and in_event:
                 dur_frames = (f - start_f) // step
                 if dur_frames >= min_event_frames:
                     end_t = (f-1) / fps
-                    events_rows.append((start_f, f-1, start_t, end_t, sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
+                    events_rows.append((start_f, f-1, start_t, end_t,
+                                        sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
                     if current_best: save_current_best()
                 in_event, start_f, start_t = False, None, None
 
@@ -1078,7 +1222,8 @@ def analyze_video(
 
     if in_event and start_f is not None:
         end_t = (f-1) / fps
-        events_rows.append((start_f, f-1, start_t, end_t, sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
+        events_rows.append((start_f, f-1, start_t, end_t,
+                            sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
         if current_best: save_current_best()
 
     if writer is not None:
