@@ -707,7 +707,13 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
                            file_name="frame_preds.csv", mime="text/csv",
                            use_container_width=True, key=f"dl_frames_{uid}")
     with c3:
-        st.button("Video disabled (snapshot mode)", disabled=True, use_container_width=True, key=f"dl_na_{uid}")
+        if labeled_path and os.path.exists(labeled_path):
+            with open(labeled_path, "rb") as fh:
+                st.download_button("⬇️ labeled.mp4", fh.read(),
+                                   file_name=os.path.basename(labeled_path),
+                                   mime="video/mp4", use_container_width=True, key=f"dl_video_{uid}")
+        else:
+            st.button("Video unavailable", disabled=True, use_container_width=True, key=f"dl_na_{uid}")
 
     extra = st.session_state.get("video_xai", {})
     df_events_zones = extra.get("events_zones")
@@ -756,7 +762,10 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
                            use_container_width=True, key=f"dl_snaps_csv_{uid}")
 
     st.markdown('<h2 class="cg-h2">Labeled Video Preview</h2>', unsafe_allow_html=True)
-    st.info("Preview unavailable.")
+    if labeled_path and os.path.exists(labeled_path):
+        st.video(labeled_path)
+    else:
+        st.info("Preview unavailable.")
 
 # Persisted rerender
 if "video_results" in st.session_state:
@@ -859,7 +868,9 @@ def analyze_video(
     os.makedirs(out_dir, exist_ok=True)
     base  = os.path.splitext(os.path.basename(video_path))[0]
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    labeled_path = ""  # snapshot-only mode
+    labeled_path = os.path.join(out_dir, f"{base}_{stamp}_labeled.mp4")
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out_video = cv2.VideoWriter(labeled_path, fourcc, fps, (W, H))
 
     prev_pts, prev_count = [], None
     in_event, start_f, start_t = False, None, None
@@ -925,6 +936,7 @@ def analyze_video(
         current_best = None
 
     f = 0
+    last_final_label = 0
     while True:
         ok, frame_bgr = cap.read()
         if not ok: break
@@ -935,6 +947,7 @@ def analyze_video(
             # --- STAMPEDE metrics (full-frame Farneback) ---
             flow_mean = flow_p95 = flow_coh = flow_div_out = flow_fast_frac = 0.0
             stampede_label = 0
+            mag = np.zeros((H, W), dtype=np.float32)
             if prev_gray_for_metrics is not None and prev_gray_for_metrics.shape == gray.shape:
                 try:
                     flow_full = cv2.calcOpticalFlowFarneback(
@@ -1199,6 +1212,37 @@ def analyze_video(
             if total_steps:
                 frac = min(1.0, processed/total_steps)
                 render_prog(frac, processed, total_steps)
+            last_final_label = final_label
+
+        # Draw overlays on every frame
+        label_text = "Stampede" if last_final_label == 1 else "Safe"
+        label_color = (0, 0, 255) if last_final_label == 1 else (0, 255, 0)
+        cv2.putText(frame_bgr, label_text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, label_color, 2)
+
+        # AI Monitoring overlay
+        cv2.putText(frame_bgr, "AI Monitoring", (W - 200, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 1)
+
+        # Draw scattered dots based on motion
+        if flow_baseline.ready:
+            fast_gate = flow_baseline.mean + FLOW_MEAN_Z * flow_baseline.std
+            rows, cols = np.where(mag > fast_gate)
+            if len(rows) > 0:
+                num_dots = int(50 + 450 * flow_fast_frac)
+                num_dots = min(num_dots, len(rows))
+                indices = np.random.choice(len(rows), num_dots, replace=False)
+                for i in indices:
+                    y_dot, x_dot = rows[i], cols[i]
+                    cv2.circle(frame_bgr, (x_dot, y_dot), 2, (0, 255, 255), -1)  # yellow dots
+
+        # Draw links if enabled
+        if draw_links:
+            for t in tracks:
+                if len(t["hist"]) > 1:
+                    prev_pos = t["hist"][-2]
+                    curr_pos = t["pos"]
+                    cv2.line(frame_bgr, (int(prev_pos[0]), int(prev_pos[1])), (int(curr_pos[0]), int(curr_pos[1])), (255, 0, 0), 1)
+
+        out_video.write(frame_bgr)
         f += 1
 
     if in_event and start_f is not None:
@@ -1208,6 +1252,13 @@ def analyze_video(
         if current_best: save_current_best()
 
     cap.release()
+    out_video.release()
+
+    # Transcode to h264
+    h264_path = labeled_path.replace(".mp4", "_h264.mp4")
+    labeled_path, ok, err = transcode_to_h264(labeled_path, h264_path, fps)
+    if not ok:
+        st.warning(f"Transcoding failed: {err}")
 
     render_prog(1.0, total_steps, total_steps)
     df_frames = pd.DataFrame(frames_rows[1:], columns=frames_rows[0])
@@ -1218,7 +1269,7 @@ def analyze_video(
                  "risk_score","cand","sum_dy_norm","max_dy_norm","heads_in_cell","cnn_cell"]
     )
     st.session_state["video_xai"] = {"events_zones": df_events_zones, "snapshots": snapshots}
-    return df_frames, df_events, ""  # snapshot mode => no video
+    return df_frames, df_events, labeled_path
 
 # =============================================================================
 # Run
