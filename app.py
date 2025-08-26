@@ -92,7 +92,7 @@ QUIET_COH_MAX        = 0.45
 W_HEADDOWN, W_FLOW, W_CAM = 0.60, 0.22, 0.18
 
 FLOW_ENABLED  = True
-SNAPSHOT_ONLY = True
+SNAPSHOT_ONLY = True  # snapshot mode remains enabled, but we now ALSO output a labeled video
 
 # ---------- Snapshot overlay control ----------
 SHOW_ZONE_BOX = False
@@ -707,8 +707,24 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
                            file_name="frame_preds.csv", mime="text/csv",
                            use_container_width=True, key=f"dl_frames_{uid}")
     with c3:
-        st.button("Video disabled (snapshot mode)", disabled=True, use_container_width=True, key=f"dl_na_{uid}")
+        if labeled_path and os.path.exists(labeled_path):
+            with open(labeled_path, "rb") as fh:
+                st.download_button("⬇️ Labeled Video (MP4)", fh.read(),
+                                   file_name=os.path.basename(labeled_path),
+                                   mime="video/mp4", use_container_width=True,
+                                   key=f"dl_vid_{uid}")
+        else:
+            st.button("Video disabled (snapshot mode)", disabled=True, use_container_width=True, key=f"dl_na_{uid}")
 
+    # Inline preview if video exists
+    if labeled_path and os.path.exists(labeled_path):
+        st.markdown('<h2 class="cg-h2">Labeled Video Preview</h2>', unsafe_allow_html=True)
+        st.video(labeled_path)
+    else:
+        st.markdown('<h2 class="cg-h2">Labeled Video Preview</h2>', unsafe_allow_html=True)
+        st.info("Preview unavailable.")
+
+    # Snapshots (NO risk text in captions)
     extra = st.session_state.get("video_xai", {})
     df_events_zones = extra.get("events_zones")
     if isinstance(df_events_zones, pd.DataFrame) and not df_events_zones.empty:
@@ -723,7 +739,6 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
         snap_rows = []
         for s in snapshots:
             path = s.get("path") or ""
-            # --------- NOTE: NO RISK IN CAPTION (as requested) ----------
             caption = f"Event {s.get('event_id','?')} • frame {s.get('frame_index','?')} • {s.get('timecode','?')} • {s.get('zone_id','?')}"
             if isinstance(path, str) and os.path.exists(path) and os.path.getsize(path) > 0:
                 col1, col2 = st.columns([2,1])
@@ -739,14 +754,13 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
                                            key=f"dl_snap_{uid}_{s.get('event_id','x')}_{s.get('frame_index','y')}")
             else:
                 st.warning(f"Snapshot file missing for event {s.get('event_id','?')} (path: {path})")
-            # keep risk values in CSVs if you still need them downstream; not shown in UI
             snap_rows.append({
                 "event_id": s.get("event_id"),
                 "frame_index": s.get("frame_index"),
                 "timecode": s.get("timecode"),
                 "zone_id": s.get("zone_id"),
                 "x0": s.get("x0"), "y0": s.get("y0"), "x1": s.get("x1"), "y1": s.get("y1"),
-                "risk_score": float(s.get("risk_score", 0.0)),
+                "risk_score": float(s.get("risk_score", 0.0)),  # kept only in CSV (not shown in UI)
                 "path": path,
             })
         df_snaps = pd.DataFrame(snap_rows)
@@ -754,9 +768,6 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
                            df_snaps.to_csv(index=False).encode("utf-8"),
                            file_name="event_snapshots.csv", mime="text/csv",
                            use_container_width=True, key=f"dl_snaps_csv_{uid}")
-
-    st.markdown('<h2 class="cg-h2">Labeled Video Preview</h2>', unsafe_allow_html=True)
-    st.info("Preview unavailable.")
 
 # Persisted rerender
 if "video_results" in st.session_state:
@@ -859,7 +870,13 @@ def analyze_video(
     os.makedirs(out_dir, exist_ok=True)
     base  = os.path.splitext(os.path.basename(video_path))[0]
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    labeled_path = ""  # snapshot-only mode
+
+    # ----- open a labeled video writer (raw frames; only mark when in detected interval)
+    tmp_labeled_path = os.path.join(out_dir, f"{base}_{stamp}_labeled_tmp.mp4")
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(tmp_labeled_path, fourcc, fps/step, (W, H))
+
+    labeled_path = None  # will be set after (optional) H.264 transcode
 
     prev_pts, prev_count = [], None
     in_event, start_f, start_t = False, None, None
@@ -923,6 +940,23 @@ def analyze_video(
                 "path": snap_path
             })
         current_best = None
+
+    # ----- minimal marker (border + pill) for event frames only
+    def mark_event_frame(frame):
+        # thin red border
+        color = (0, 0, 255)
+        h, w = frame.shape[:2]
+        thickness = max(2, int(round(0.004 * max(h, w))))
+        cv2.rectangle(frame, (0, 0), (w - 1, h - 1), color, thickness)
+        # small "EVENT" pill top-left (no risk or %)
+        txt = "EVENT"
+        fs = 0.6
+        (tw, th), bl = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, fs, 2)
+        pad = 8
+        x0, y0 = pad, pad + th
+        cv2.rectangle(frame, (x0 - pad, y0 - th - pad//2), (x0 - pad + tw + 2*pad, y0 + pad//2),
+                      (20, 20, 20), -1)
+        cv2.putText(frame, txt, (x0, y0), cv2.FONT_HERSHEY_SIMPLEX, fs, (255, 255, 255), 2, cv2.LINE_AA)
 
     f = 0
     while True:
@@ -1082,7 +1116,7 @@ def analyze_video(
                     torso_flow = float(down_mag[yt0:yt1, x0r:x1r].mean()) if yt1>yt0 else 0.0
                     head_flow  = float(down_mag[yh0:yh1, x0r:x1r].mean()) if yh1>yh0 else 0.0
                     torso_ratio = (torso_flow + 1e-6) / (head_flow + 1e-6)
-                    torso_scene = (torso_flow + 1e-6) / scene_mean_flow
+                    torso_scene = (torso_flow + 1e-6) / (scene_mean_flow + 1e-6)
 
                     # STRONGER joint condition: head drop + relative drop + torso motion dominance
                     cond_drop  = (dy_norm_abs >= HEAD_DOWN_MIN_DY_FRAC) or (dy >= HEAD_DOWN_MIN_DY_RAD * rhead)
@@ -1182,6 +1216,13 @@ def analyze_video(
                 final_label
             ))
 
+            # ----- write labeled video frame (raw + minimal marker only during events)
+            frame_to_write = frame_bgr.copy()
+            if final_label == 1:
+                mark_event_frame(frame_to_write)
+            if writer is not None:
+                writer.write(frame_to_write)
+
             if final_label == 1 and not in_event:
                 in_event, start_f, start_t = True, f, t
                 event_id += 1
@@ -1207,6 +1248,15 @@ def analyze_video(
                             sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
         if current_best: save_current_best()
 
+    # finalize video writer
+    if writer is not None:
+        writer.release()
+
+    # transcode to H.264 for broad compatibility in Streamlit players
+    labeled_h264 = os.path.join(out_dir, f"{base}_{stamp}_labeled.mp4")
+    labeled_final, ok_h264, _ = transcode_to_h264(tmp_labeled_path, labeled_h264, fps/step)
+    labeled_path = labeled_final if os.path.exists(labeled_final) else (tmp_labeled_path if os.path.exists(tmp_labeled_path) else None)
+
     cap.release()
 
     render_prog(1.0, total_steps, total_steps)
@@ -1218,7 +1268,7 @@ def analyze_video(
                  "risk_score","cand","sum_dy_norm","max_dy_norm","heads_in_cell","cnn_cell"]
     )
     st.session_state["video_xai"] = {"events_zones": df_events_zones, "snapshots": snapshots}
-    return df_frames, df_events, ""  # snapshot mode => no video
+    return df_frames, df_events, labeled_path
 
 # =============================================================================
 # Run
