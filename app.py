@@ -1,3 +1,7 @@
+Final Video Code of Capstone
+
+
+
 # app.py — Crowd Guardian (Video only)
 # Premium UI: custom HTML/CSS, decorated sidebar, status banner (no timeline bar),
 # Altair charts, JS confetti, animated particles background, and
@@ -38,10 +42,12 @@ if "render_nonce" not in st.session_state:
 st.session_state.setdefault("video_xai", {"events_zones": pd.DataFrame(), "snapshots": []})
 
 # ---------- Inference defaults (no UI knobs) ----------
-CNN_THRESHOLD = 0.75   # stricter
+# Make CNN stricter to reduce spurious positives on static scenes
+CNN_THRESHOLD = 0.75   # was 0.50 / 0.65
+
 ABS_DROP      = 2
 REL_DROP      = 0.20
-MIN_EVENT_SEC = 1.5
+MIN_EVENT_SEC = 1.5     # was 1.0 → avoid blink events
 COMBINE_RULE  = "and"
 MIN_FRAC      = 0.00005
 MAX_FRAC      = 0.0020
@@ -64,38 +70,43 @@ GRID_ROWS     = 6
 GRID_COLS     = 6
 
 # Head+Torso collapse detector (primary signal)
+# Tightened to ignore phone-looking head tilts
 HEAD_DOWN_WINDOW_SEC      = 0.8
-HEAD_DOWN_MIN_DY_FRAC     = 0.06
-HEAD_DOWN_MIN_DY_RAD      = 1.20
-HEAD_DOWN_MIN_STREAK_SEC  = 0.80
+HEAD_DOWN_MIN_DY_FRAC     = 0.06  # was 0.02
+HEAD_DOWN_MIN_DY_RAD      = 1.20  # was 0.8
+HEAD_DOWN_MIN_STREAK_SEC  = 0.80  # was 0.35
 NEIGH_RADIUS_MULT         = 3.0
-NEIGH_REL_MIN_RAD         = 1.20
-MASS_DROP_PENALTY_START   = 0.88
-MASS_DROP_PENALTY_STRENGTH= 0.25
+NEIGH_REL_MIN_RAD         = 1.20  # was 0.6
+MASS_DROP_PENALTY_START   = 0.88  # was 0.80
+MASS_DROP_PENALTY_STRENGTH= 0.25  # was 0.30
 
-# Torso motion requirements
-TORSO_RATIO_MIN = 1.50
-TORSO_SCENE_MIN = 1.40
+# Torso motion requirements (both head AND torso must go down together)
+TORSO_RATIO_MIN = 1.50   # torso must move more than head region
+TORSO_SCENE_MIN = 1.40   # torso motion must exceed scene average
 
-# Require at least N people showing head+torso down together
-HT_MIN_CAND        = 4
-FLOW_MIN_FAST_FRAC = 0.18
-FLOW_MIN_COH       = 0.60
+# Require at least N people showing head+torso down together (for crush)
+HT_MIN_CAND        = 4     # was 3
+FLOW_MIN_FAST_FRAC = 0.18  # was 0.12
+FLOW_MIN_COH       = 0.60  # was 0.50
 
-# Quiet-scene suppression
+# Quiet-scene suppression (extra guard for static scenes)
 QUIET_SCENE_SUPPRESS = True
 QUIET_P95_MAX        = 1.20
 QUIET_FAST_FRAC_MAX  = 0.08
 QUIET_COH_MAX        = 0.45
 
 # risk weights
-W_HEADDOWN, W_FLOW, W_CAM = 0.60, 0.22, 0.18
+W_HEADDOWN, W_FLOW, W_CAM = 0.60, 0.22, 0.18  # slightly rebalanced
 
+# Ancillary cues
 FLOW_ENABLED  = True
-SNAPSHOT_ONLY = False
+SNAPSHOT_ONLY = True
 
 # ---------- Snapshot overlay control ----------
+# Red box & caption removed (kept for compatibility only)
 SHOW_ZONE_BOX = False
+
+# Enforce: for stampede to occur whole head and body must go down together
 STRICT_REQUIRE_HEAD_AND_TORSO = True
 
 # ---------- Model location ----------
@@ -106,16 +117,6 @@ DEFAULT_MODEL_URL = (
     "?rlkey=e863b9skyvpyn0dn4gbwxd71s&st=uvgqjq7q&dl=1"
 )
 MODEL_URL = st.secrets.get("MODEL_URL", DEFAULT_MODEL_URL)
-
-# ---------- Load logo (base64) ----------
-def _load_logo_b64():
-    try:
-        logo_path = APP_DIR / "assets" / "Crowd_Guardian_EWU_logo2.png"
-        with open(logo_path, "rb") as f:
-            return base64.b64encode(f.read()).decode("ascii")
-    except Exception:
-        return ""
-LOGO_B64 = _load_logo_b64()
 
 # =============================================================================
 # Global styles (HTML/CSS)
@@ -128,7 +129,6 @@ st.markdown(
         --bg:#0a0f1a; --panel:#0e1526; --panel2:#101826;
         --muted:rgba(148,163,184,.35); --muted2:rgba(148,163,184,.18);
         --text:#e6e9ef; --accent:#ef4444; --accent2:#f97316;
-        --logo-size: 120px;           /* <— change this to resize the hero logo */
       }
       html, body, [class*="css"] {
         font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif !important;
@@ -143,21 +143,13 @@ st.markdown(
       }
       header{visibility:hidden;} [data-testid="stToolbar"]{display:none;} #MainMenu{visibility:hidden;} footer{visibility:hidden;}
 
-      /* ---------------- Hero ---------------- */
       .cg-hero {
-        position: relative;
-        margin-top: 8px; padding: 30px 32px 32px 128px;   /* left padding reserves space for logo */
-        border-radius: 20px; border: 1px solid var(--muted2);
+        margin-top: 8px; padding: 30px 32px; border-radius: 20px;
+        border: 1px solid var(--muted2);
         background:
           radial-gradient(1200px 420px at 0% -10%, rgba(59,130,246,.16), transparent),
           linear-gradient(180deg, rgba(17,24,39,.55), rgba(2,6,23,.45));
         text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,.25);
-      }
-      .cg-logo{
-        position:absolute; left:26px; top:50%; transform: translateY(-50%);
-        width: var(--logo-size); height: var(--logo-size);
-        border-radius: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.35), 0 0 0 3px rgba(255,255,255,.05) inset;
-        object-fit: cover; background: rgba(255,255,255,.06);
       }
       .cg-title  {font-size: 2.75rem; line-height: 1.08; margin: 0 0 .35rem 0; letter-spacing:.1px;}
       .cg-subtle {opacity:.95; margin:0; font-size: 1.08rem;}
@@ -219,12 +211,6 @@ st.markdown(
 
       .stDataFrame {border-radius: 10px; overflow:hidden; border:1px solid var(--muted2);}
       [data-testid="stFileUploadDropzone"]{ margin-top: 0 !important; }
-
-      /* --------- Custom progress bar (single gradient bar) ---------- */
-      .cg-prog-label{margin:6px 4px 6px; font-weight:700; letter-spacing:.2px;}
-      .cg-prog-track{height:12px; border-radius:999px; background:rgba(255,255,255,.08);
-                      box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);}
-      .cg-prog-fill{height:12px; border-radius:999px; background:linear-gradient(90deg, var(--accent), var(--accent2));}
     </style>
     """,
     unsafe_allow_html=True,
@@ -232,19 +218,26 @@ st.markdown(
 
 # ---------- safe wrapper for components.html ----------
 def _safe_html(html: str, *, height: int, key: str, scrolling: bool=False, width: int=0):
+    """
+    Render a components.html panel but never crash the app if the frontend
+    doesn't like the message shape (TypeError / Bad message format).
+    """
     try:
         components.html(html, height=height, key=key, scrolling=scrolling, width=width)
     except TypeError:
+        # swallow and continue – background / confetti are non-essential
         pass
     except Exception:
         pass
 
 # =============================================================================
-# Background Particles
+# Background Particles (JS canvas behind page)
 # =============================================================================
 _safe_html("""
 <canvas id="cg-bg"></canvas>
-<style>#cg-bg{position:fixed; inset:0; z-index:-2; background:transparent;}</style>
+<style>
+  #cg-bg{position:fixed; inset:0; z-index:-2; background:transparent;}
+</style>
 <script>
   const c = document.getElementById('cg-bg'), ctx = c.getContext('2d');
   function resize(){ c.width = innerWidth; c.height = innerHeight; }
@@ -274,7 +267,7 @@ _safe_html("""
 """, height=48, key="bg_particles_iframe", scrolling=False, width=0)
 
 # =============================================================================
-# Sidebar — PROJECT DETAILS + Detection Mode (UNCHANGED UI)
+# Sidebar — PROJECT DETAILS + Detection Mode
 # =============================================================================
 with st.sidebar:
     st.markdown('<div class="sb-brand">🛡️ Crowd Guardian</div>', unsafe_allow_html=True)
@@ -328,6 +321,7 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
+    # ---- Detection Mode switch ----
     detection_mode = st.selectbox(
         "Detection Mode",
         ["Hybrid (Default)", "Stampede (Running Panic)", "Crush/Surge (Compression)"],
@@ -336,23 +330,13 @@ with st.sidebar:
     )
 
 # =============================================================================
-# Hero (logo left, text centered)
+# Hero
 # =============================================================================
-if LOGO_B64:
-    logo_tag = f'<img class="cg-logo" alt="Crowd Guardian Logo" src="data:image/png;base64,{LOGO_B64}"/>'
-else:
-    logo_tag = ''
-
 st.markdown(
-    f'''
-    <div class="cg-hero">
-      {logo_tag}
-      <div class="cg-hero-center">
-        <div class="cg-title">Crowd Guardian</div>
-        <div class="cg-subtle">Machine learning based crowd dynamics analysis for effective stampede detection</div>
-      </div>
-    </div>
-    ''',
+    '<div class="cg-hero">'
+    '<div class="cg-title">Crowd Guardian</div>'
+    '<div class="cg-subtle">Machine learning based crowd dynamics analysis for effective stampede detection</div>'
+    '</div>',
     unsafe_allow_html=True,
 )
 
@@ -388,15 +372,14 @@ def sec_to_tc(sec: float) -> str:
     return f"{h:02d}:{m:02d}:{s:06.3f}"
 
 def build_blob_detector(frame_w, frame_h, min_frac=MIN_FRAC, max_frac=MAX_FRAC,
-                        min_circ=MIN_CIRC, min_iner=MIN_INER, thresh_step=10):
-    """Consistent param name: min_iner (fixes NameError)."""
+                        min_circ=MIN_CIRC, min_inertia=MIN_INER, thresh_step=10):
     area = float(frame_w * frame_h)
     minArea = max(5.0, min_frac * area); maxArea = max(minArea + 1.0, max_frac * area)
     p = cv2.SimpleBlobDetector_Params()
     p.minThreshold, p.maxThreshold, p.thresholdStep = 10, 220, thresh_step
     p.filterByArea, p.minArea, p.maxArea = True, minArea, maxArea
     p.filterByCircularity, p.minCircularity = True, min_circ
-    p.filterByInertia, p.minInertiaRatio = True, min_iner
+    p.filterByInertia, p.minInertiaRatio = True, min_inertia
     p.filterByConvexity = p.filterByColor = False
     return (cv2.SimpleBlobDetector(p) if int(cv2.__version__.split('.')[0]) < 3
             else cv2.SimpleBlobDetector_create(p))
@@ -470,6 +453,7 @@ def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
             return tf.squeeze(t, axis=-1) if c == 1 else t[:, -1]
         return tf.reshape(t, (tf.shape(t)[0], -1))[:, -1]
 
+    # pick last conv
     target_layer = None
     if conv_layer_name:
         try:
@@ -595,7 +579,7 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
     c2.metric("Total Duration (s)", f"{total_dur:.2f}")
     c3.metric("Longest Event (s)", f"{longest:.2f}")
 
-    # Confetti if detected
+    # Confetti if detected (safe)
     if total_events > 0:
         _safe_html("""
         <canvas id="c"></canvas>
@@ -723,8 +707,8 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
         snap_rows = []
         for s in snapshots:
             path = s.get("path") or ""
-            # --------- NOTE: NO RISK IN CAPTION (as requested) ----------
-            caption = f"Event {s.get('event_id','?')} • frame {s.get('frame_index','?')} • {s.get('timecode','?')} • {s.get('zone_id','?')}"
+            risk = float(s.get("risk_score", 0.0)) if s.get("risk_score", None) is not None else 0.0
+            caption = f"Event {s.get('event_id','?')} • frame {s.get('frame_index','?')} • {s.get('timecode','?')} • {s.get('zone_id','?')} (risk {risk:.2f})"
             if isinstance(path, str) and os.path.exists(path) and os.path.getsize(path) > 0:
                 col1, col2 = st.columns([2,1])
                 with col1:
@@ -739,15 +723,13 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
                                            key=f"dl_snap_{uid}_{s.get('event_id','x')}_{s.get('frame_index','y')}")
             else:
                 st.warning(f"Snapshot file missing for event {s.get('event_id','?')} (path: {path})")
-            # keep risk values in CSVs if you still need them downstream; not shown in UI
             snap_rows.append({
                 "event_id": s.get("event_id"),
                 "frame_index": s.get("frame_index"),
                 "timecode": s.get("timecode"),
                 "zone_id": s.get("zone_id"),
                 "x0": s.get("x0"), "y0": s.get("y0"), "x1": s.get("x1"), "y1": s.get("y1"),
-                "risk_score": float(s.get("risk_score", 0.0)),
-                "path": path,
+                "risk_score": risk, "path": path,
             })
         df_snaps = pd.DataFrame(snap_rows)
         st.download_button("⬇️ event_snapshots.csv",
@@ -878,24 +860,8 @@ def analyze_video(
     window_frames = max(1, int(round(HEAD_DOWN_WINDOW_SEC * (fps/step))))
     streak_frames = max(2, int(round(HEAD_DOWN_MIN_STREAK_SEC * (fps/step))))
 
-    # --------- Custom progress (single gradient bar) ----------
-    prog_box = st.empty()
-    processed = 0
-    total_steps = (N // step + 1) if N > 0 else 0
-
-    def render_prog(frac, processed, total):
-        pct = int(round(100.0 * max(0.0, min(1.0, frac))))
-        prog_box.markdown(
-            f'''
-            <div class="cg-prog">
-              <div class="cg-prog-label">Processing frames… <b>{pct}%</b> ({processed}/{total})</div>
-              <div class="cg-prog-track"><div class="cg-prog-fill" style="width:{pct}%"></div></div>
-            </div>
-            ''',
-            unsafe_allow_html=True
-        )
-
-    render_prog(0.0, 0, total_steps)
+    prog = st.progress(0.0); status = st.empty()
+    processed = 0; total_steps = (N // step + 1) if N > 0 else 0
 
     # helper to save the best snapshot per event — NO drawing overlays
     def save_current_best():
@@ -996,7 +962,7 @@ def analyze_video(
             p_cnn = float(model.predict(x, verbose=0)[0][0])
             y_cnn = 1 if p_cnn >= cnn_threshold else 0
 
-            # Mode-aware intermediates
+            # Mode-aware intermediates (legacy)
             final_crush = combine_labels(y_heads, y_cnn, COMBINE_RULE)
             final_stamp = combine_labels(stampede_label, y_cnn, COMBINE_RULE)
 
@@ -1102,7 +1068,7 @@ def analyze_video(
                         rec["cand"] += 1
                         rec["sum_dy_norm"] += dy_norm_abs
                         rec["max_dy_norm"] = max(rec["max_dy_norm"], dy_norm_abs)
-                        rec["torso_flow_accum"] += (torso_flow + 1e-6) / (scene_mean_flow + 1e-6)
+                        rec["torso_flow_accum"] += torso_scene
 
                 # fill cnn_cell & compute risk
                 for rec in cell_records:
@@ -1130,7 +1096,7 @@ def analyze_video(
                 bx0,by0,bx1,by1 = best["x0"], best["y0"], best["x1"], best["y1"]
                 best_risk = best["risk"]
 
-                if (current_best is None) or (best_risk > float(current_best["risk_score"])) or (current_best and current_best.get("event_id") != event_id):
+                if (current_best is None) or (best_risk > float(current_best["risk_score"])):
                     current_best = {
                         "event_id": event_id,
                         "frame": frame_bgr.copy(),
@@ -1153,25 +1119,30 @@ def analyze_video(
                         "cnn_cell": rc["cnn_cell"],
                     })
 
+            # heads_torso_label captures strict requirement: head AND torso down together
             heads_torso_label = 1 if any_head_and_torso_down else 0
 
             # ---------- FINAL LABEL LOGIC ----------
+            # Demand crowd motion AND multiple head+torso candidates AND CNN agreement
             motion_ok = (flow_fast_frac >= FLOW_MIN_FAST_FRAC) and (flow_coh >= FLOW_MIN_COH)
             strict_crush = 1 if (ht_cand_count >= HT_MIN_CAND and y_cnn == 1 and motion_ok) else 0
 
             mode = (detection_mode or "Hybrid").lower()
             if "stampede" in mode:
-                final_label = final_stamp
+                final_label = final_stamp   # running panic path (flow signature)
             elif "crush" in mode or "surge" in mode:
                 final_label = strict_crush
             else:
+                # Hybrid: either clear running panic OR strict crush
                 final_label = 1 if (final_stamp == 1 or strict_crush == 1) else 0
 
+            # Veto weird still scenes if needed
             if QUIET_SCENE_SUPPRESS and final_label == 1:
                 quiet_scene = (flow_p95 < QUIET_P95_MAX) and (flow_fast_frac < QUIET_FAST_FRAC_MAX) and (flow_coh < QUIET_COH_MAX)
                 if quiet_scene and strict_crush == 1 and final_stamp == 0:
                     final_label = 0
 
+            # Append row
             t = f / fps; tc = sec_to_tc(t)
             frames_rows.append((
                 f, t, tc,
@@ -1182,6 +1153,7 @@ def analyze_video(
                 final_label
             ))
 
+            # Event handling
             if final_label == 1 and not in_event:
                 in_event, start_f, start_t = True, f, t
                 event_id += 1
@@ -1197,8 +1169,8 @@ def analyze_video(
 
             processed += 1
             if total_steps:
-                frac = min(1.0, processed/total_steps)
-                render_prog(frac, processed, total_steps)
+                prog.progress(min(1.0, processed/total_steps))
+                status.write(f"Processed {processed}/{total_steps} sampled frames…")
         f += 1
 
     if in_event and start_f is not None:
@@ -1209,7 +1181,7 @@ def analyze_video(
 
     cap.release()
 
-    render_prog(1.0, total_steps, total_steps)
+    prog.progress(1.0); status.write("Done.")
     df_frames = pd.DataFrame(frames_rows[1:], columns=frames_rows[0])
     df_events = pd.DataFrame(events_rows[1:], columns=events_rows[0])
 
@@ -1243,3 +1215,4 @@ if go:
         st.session_state["detection_mode_label"] = detection_mode
         st.session_state["render_nonce"] = str(int(time.time() * 1e6))
         render_results(df_frames, df_events, labeled_path, key_seed=st.session_state["render_nonce"])
+
