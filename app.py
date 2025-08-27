@@ -1265,7 +1265,7 @@ def analyze_video(
             for t in tracks:
                 if len(t["hist"]) > 1:
                     prev_pos = t["hist"][-2]
-                    curr_pos = t["pos"
+                    curr_pos = t["pos"]
                     cv2.line(frame_bgr, (int(prev_pos[0]), int(prev_pos[1])), (int(curr_pos[0]), int(curr_pos[1])), (255, 0, 0), 1)
 
         out_video.write(frame_bgr)
