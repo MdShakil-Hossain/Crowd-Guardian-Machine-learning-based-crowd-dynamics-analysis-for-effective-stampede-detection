@@ -682,7 +682,7 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
             line_fp95  = base.mark_line(strokeDash=[4,4]).encode(
                 x='frame_index:Q', y=alt.Y('flow_p95:Q', title=None)
             )
-            st.altair_chart((line_fmean + line_fp95).interact
+            st.altair_chart((line_fmean + line_fp95).interact,
 
 ive(), use_container_width=True)
         with right2:
@@ -1326,4 +1326,5 @@ if go:
         st.session_state["detection_mode_label"] = detection_mode
         st.session_state["render_nonce"] = str(int(time.time() * 1e6))
         render_results(df_frames, df_events, labeled_path, key_seed=st.session_state["render_nonce"])
+
 
