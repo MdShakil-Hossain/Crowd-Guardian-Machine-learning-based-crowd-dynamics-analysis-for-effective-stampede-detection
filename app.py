@@ -1236,11 +1236,6 @@ def analyze_video(
                     y_dot, x_dot = rows[i], cols[i]
                     cv2.circle(frame_bgr, (x_dot, y_dot), 2, (0, 255, 255), -1)  # yellow dots
 
-        # Draw red bounding box for stampede zone if detected
-        if last_final_label == 1 and current_best:
-            x0, y0, x1, y1 = current_best["x0"], current_best["y0"], current_best["x1"], current_best["y1"]
-            cv2.rectangle(frame_bgr, (x0, y0), (x1, y1), (0, 0, 255), 2)  # Red box, thickness 2
-
         # Draw links if enabled
         if draw_links:
             for t in tracks:
@@ -1301,4 +1296,3 @@ if go:
         st.session_state["detection_mode_label"] = detection_mode
         st.session_state["render_nonce"] = str(int(time.time() * 1e6))
         render_results(df_frames, df_events, labeled_path, key_seed=st.session_state["render_nonce"])
-
