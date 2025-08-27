@@ -295,8 +295,8 @@ with st.sidebar:
               </div>
             </div>
           </div>
-          <div class="divider"></div>
-          <div class="sb-small">This application demonstrates ML-assisted analysis of crowd dynamics with visual evidence and interval summaries.</div>
+          <.closest
+            <div class="sb-small">This application demonstrates ML-assisted analysis of crowd dynamics with visual evidence and interval summaries.</div>
         </div>
         """,
         unsafe_allow_html=True
@@ -647,7 +647,7 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
             )
             st.altair_chart(line_head.interactive(), use_container_width=True)
 
-        left2, right2 = st.columns(2)
+        left2, st.columns(2)
         with left2:
             st.subheader("Flow Speed (mean & p95)")
             line_fmean = base.mark_line().encode(
@@ -824,16 +824,52 @@ def add_boxes_to_video(input_path, output_path, df_events, snapshots):
         for fr in range(start_f, end_f + 1):
             frame_to_event[fr] = eid
 
+    # Initialize optical flow for camera motion compensation
+    prev_gray = None
+    flow = None
+    transform = np.eye(3, dtype=np.float32)  # Cumulative transform matrix
+
     f = 0
     while True:
         ok, frame = cap.read()
         if not ok: break
+        frame_bgr = frame.copy()
+
+        # Compute optical flow for camera motion
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if prev_gray is not None and prev_gray.shape == gray.shape:
+            try:
+                flow = cv2.calcOpticalFlowFarneback(
+                    prev_gray, gray, None,
+                    0.5, 3, 15, 3, 5, 1.2, 0
+                )
+                # Estimate global transform (translation only for simplicity)
+                dx = np.median(flow[..., 0])
+                dy = np.median(flow[..., 1])
+                # Update cumulative transform
+                delta_transform = np.array([[1, 0, -dx], [0, 1, -dy], [0, 0, 1]], dtype=np.float32)
+                transform = transform @ delta_transform
+            except cv2.error:
+                pass
+        prev_gray = gray.copy()
+
         if f in frame_to_event:
             eid = frame_to_event[f]
             if eid in event_boxes:
                 x0, y0, x1, y1 = event_boxes[eid]
-                cv2.rectangle(frame, (x0, y0), (x1, y1), (0, 0, 255), 2)
-        out.write(frame)
+                # Apply inverse transform to keep box stationary
+                pts = np.array([[x0, y0], [x1, y1]], dtype=np.float32).reshape(-1, 1, 2)
+                inv_transform = np.linalg.inv(transform)
+                transformed_pts = cv2.transform(pts, inv_transform[:2]).reshape(-1, 2)
+                x0_t, y0_t = transformed_pts[0]
+                x1_t, y1_t = transformed_pts[1]
+                # Ensure coordinates are within bounds
+                x0_t = max(0, min(W - 1, int(x0_t)))
+                y0_t = max(0, min(H - 1, int(y0_t)))
+                x1_t = max(0, min(W - 1, int(x1_t)))
+                y1_t = max(0, min(H - 1, int(y1_t)))
+                cv2.rectangle(frame_bgr, (x0_t, y0_t), (x1_t, y1_t), (0, 0, 255), 2)
+        out.write(frame_bgr)
         f += 1
 
     cap.release()
@@ -1352,23 +1388,4 @@ if go:
         out_dir = os.path.join(os.getcwd(), "outputs")
         base = os.path.splitext(os.path.basename(tmp.name))[0]
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        boxed_path = os.path.join(out_dir, f"{base}_{stamp}_labeled_with_box.mp4")
-        boxed_path = add_boxes_to_video(prelim_labeled_path, boxed_path, df_events, st.session_state["video_xai"]["snapshots"])
-        temp_cap = cv2.VideoCapture(boxed_path)
-        fps = temp_cap.get(cv2.CAP_PROP_FPS) or 30.0
-        temp_cap.release()
-        h264_path = boxed_path.replace(".mp4", "_h264.mp4")
-        labeled_path, ok, err = transcode_to_h264(boxed_path, h264_path, fps)
-        if not ok:
-            st.warning(f"Transcoding failed: {err}")
-        st.session_state["video_results"] = {
-            "df_frames": df_frames,
-            "df_events": df_events,
-            "labeled_path": labeled_path,
-        }
-        st.session_state["detection_mode_label"] = detection_mode
-        st.session_state["render_nonce"] = str(int(time.time() * 1e6))
-        render_results(df_frames, df_events, labeled_path, key_seed=st.session_state["render_nonce"])
-
-
-
+        boxed_path =
