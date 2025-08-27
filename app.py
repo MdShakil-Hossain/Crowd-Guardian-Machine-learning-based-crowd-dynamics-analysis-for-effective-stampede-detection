@@ -1394,12 +1394,14 @@ if go:
             df_events,
             st.session_state["video_xai"]["snapshots"]
         )
+        # Debug: Log state
+        st.write("Debug: Setting video_results in session state")
         st.session_state["video_results"] = {
             "df_frames": df_frames,
             "df_events": df_events,
             "labeled_path": boxed_path
         }
         st.session_state["detection_mode_label"] = detection_mode
+        st.write("Debug: Calling render_results")
         render_results(df_frames, df_events, boxed_path)
-        os.unlink(tmp.name)  # Clean up temporary file
-
+        os.unlink(tmp.name)
