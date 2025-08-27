@@ -1389,9 +1389,17 @@ if go:
         base = os.path.splitext(os.path.basename(tmp.name))[0]
         stamp = time.strftime("%Y%m%d-%H%M%S")
         boxed_path = add_boxes_to_video(
-    prelim_labeled_path,
-    os.path.join(out_dir, f"{base}_{stamp}_boxed.mp4"),
-    df_events,
-    st.session_state["video_xai"]["snapshots"]
-)
+            prelim_labeled_path,
+            os.path.join(out_dir, f"{base}_{stamp}_boxed.mp4"),
+            df_events,
+            st.session_state["video_xai"]["snapshots"]
+        )
+        st.session_state["video_results"] = {
+            "df_frames": df_frames,
+            "df_events": df_events,
+            "labeled_path": boxed_path
+        }
+        st.session_state["detection_mode_label"] = detection_mode
+        render_results(df_frames, df_events, boxed_path)
+        os.unlink(tmp.name)  # Clean up temporary file
 
