@@ -1,8 +1,3 @@
-# app.py — Crowd Guardian (Video only)
-# Premium UI: custom HTML/CSS, decorated sidebar, status banner (no timeline bar),
-# Altair charts, JS confetti, animated particles background, and
-# **session_state persistence** so downloads don't "refresh away" your results.
-
 import os
 import cv2
 import time
@@ -190,20 +185,6 @@ st.markdown(
       .sb-small {font-size:12px; opacity:.85;}
       .sb-card ul, .sb-card ol {padding-left: 1.05rem; margin: .25rem 0 0 0;}
       .sb-card li {margin-bottom: 6px;}
-
-      .capstone-badge {
-        display:inline-flex; align-items:center; gap:8px; margin-bottom:10px;
-        background: linear-gradient(90deg, rgba(239,68,68,.18), rgba(249,115,22,.18));
-        border:1px solid rgba(249,115,22,.35); color:#ffd7c2; padding:6px 10px; border-radius:999px; font-size:12px;
-      }
-      .capstone-grid { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-      .cap-card { border:1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.03);
-                  border-radius: 12px; padding: 10px 12px; }
-      .cap-title {font-weight:700; margin-bottom:6px;}
-      .cap-kv {font-size: 13px; line-height: 1.25rem;}
-      .cap-name {font-weight:600;}
-      .cap-id {opacity:.85;}
-      .divider {height:1px; background:rgba(255,255,255,.06); margin:10px 0;}
 
       .status-banner{
         display:flex; align-items:center; justify-content:center;
@@ -771,7 +752,7 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
 if "video_results" in st.session_state:
     _res = st.session_state["video_results"]
     render_results(_res["df_frames"], _res["df_events"], _res.get("labeled_path"),
-                   key_seed=st.session_state.get("render_nonce"))
+                   key_seed=st.session_state.get("render_nonce", "0"))
 
 # =============================================================================
 # Upload
