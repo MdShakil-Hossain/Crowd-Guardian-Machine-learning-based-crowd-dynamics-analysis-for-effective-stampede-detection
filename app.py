@@ -520,7 +520,7 @@ def make_grid(W, H, rows=6, cols=6):
             boxes.append((
                 (float(x0)/W, float(y0)/H, float(x1)/W, float(y1)/H),  # Store normalized
                 f"r{r}c{c}"
-            )))
+            ))
     return boxes, cell_w, cell_h
 
 def _show_image_resilient(path: str, caption: str) -> bool:
@@ -1356,4 +1356,5 @@ if go:
         st.session_state["detection_mode_label"] = detection_mode
         st.session_state["render_nonce"] = str(int(time.time() * 1e6))
         render_results(df_frames, df_events, labeled_path, key_seed=st.session_state["render_nonce"])
+
 
