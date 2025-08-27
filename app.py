@@ -683,7 +683,7 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
                 x='frame_index:Q', y=alt.Y('flow_p95:Q', title=None)
             )
             st.altair_chart((line_fmean + line_fp95).interact
-```python
+
 ive(), use_container_width=True)
         with right2:
             st.subheader("Flow Coherence")
@@ -1326,3 +1326,4 @@ if go:
         st.session_state["detection_mode_label"] = detection_mode
         st.session_state["render_nonce"] = str(int(time.time() * 1e6))
         render_results(df_frames, df_events, labeled_path, key_seed=st.session_state["render_nonce"])
+
