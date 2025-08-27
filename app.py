@@ -191,6 +191,20 @@ st.markdown(
       .sb-card ul, .sb-card ol {padding-left: 1.05rem; margin: .25rem 0 0 0;}
       .sb-card li {margin-bottom: 6px;}
 
+      .capstone-badge {
+        display:inline-flex; align-items:center; gap:8px; margin-bottom:10px;
+        background: linear-gradient(90deg, rgba(239,68,68,.18), rgba(249,115,22,.18));
+        border:1px solid rgba(249,115,22,.35); color:#ffd7c2; padding:6px 10px; border-radius:999px; font-size:12px;
+      }
+      .capstone-grid { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .cap-card { border:1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.03);
+                  border-radius: 12px; padding: 10px 12px; }
+      .cap-title {font-weight:700; margin-bottom:6px;}
+      .cap-kv {font-size: 13px; line-height: 1.25rem;}
+      .cap-name {font-weight:600;}
+      .cap-id {opacity:.85;}
+      .divider {height:1px; background:rgba(255,255,255,.06); margin:10px 0;}
+
       .status-banner{
         display:flex; align-items:center; justify-content:center;
         gap:10px; height:52px; border-radius:12px; margin:12px 0;
@@ -210,17 +224,11 @@ st.markdown(
       .cg-prog-label{margin:6px 4px 6px; font-weight:700; letter-spacing:.2px;}
       .cg-prog-track{height:12px; border-radius:999px; background:rgba(255,255,255,.08);
                       box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);}
-
       .cg-prog-fill{height:12px; border-radius:999px; background:linear-gradient(90deg, var(--accent), var(--accent2));}
     </style>
     """,
     unsafe_allow_html=True,
 )
-
-# --------- Continue with the remaining code unchanged ---------
-# (Insert the rest of your original code here, including all functions and logic)
-# I have updated the snapshot handling as per your request to display locations.
-
 
 # ---------- safe wrapper for components.html ----------
 def _safe_html(html: str, *, height: int, key: str, scrolling: bool=False, width: int=0):
@@ -721,7 +729,6 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
         snap_rows = []
         for s in snapshots:
             path = s.get("path") or ""
-            # --------- NOTE: NO RISK IN CAPTION (as requested) ----------
             caption = f"Event {s.get('event_id','?')} • frame {s.get('frame_index','?')} • {s.get('timecode','?')} • {s.get('zone_id','?')}"
             if isinstance(path, str) and os.path.exists(path) and os.path.getsize(path) > 0:
                 col1, col2 = st.columns([2,1])
@@ -737,7 +744,6 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
                                            key=f"dl_snap_{uid}_{s.get('event_id','x')}_{s.get('frame_index','y')}")
             else:
                 st.warning(f"Snapshot file missing for event {s.get('event_id','?')} (path: {path})")
-            # keep risk values in CSVs if you still need them downstream; not shown in UI
             snap_rows.append({
                 "event_id": s.get("event_id"),
                 "frame_index": s.get("frame_index"),
@@ -763,7 +769,7 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
 if "video_results" in st.session_state:
     _res = st.session_state["video_results"]
     render_results(_res["df_frames"], _res["df_events"], _res.get("labeled_path"),
-                   key_seed=st.session_state.get("render_nonce", "0"))
+                   key_seed=st.session_state.get("render_nonce"))
 
 # =============================================================================
 # Upload
@@ -1049,241 +1055,53 @@ def analyze_video(
                 def cell_index_for(x, y):
                     c = min(GRID_COLS-1, max(0, int(x // max(1, cell_w))))
                     r = min(GRID_ROWS-1, max(0, int(y // max(1, cell_h))))
-                    return r*GRID_COLS + c
+                    return c + GRID_COLS * r
 
-                def neighbors_y_median(x, y, r_head):
-                    ys = []
-                    for t2 in tracks:
-                        (x2, y2) = t2["pos"]; r2 = max(2.0, t2.get("r", r_head))
-                        if abs(x2 - x) <= NEIGH_RADIUS_MULT * r_head and abs(y2 - y) <= 3.0 * r_head:
-                            ys.append(y2)
-                    if len(ys) < 3:
-                        ys.extend([y] * (3 - len(ys)))
-                    ys.sort()
-                    return ys[len(ys)//2]
+                for t in tracks:
+                    if t["miss"] > 1: continue
+                    for (i, cid) in zip(range(len(cell_records)), range(len(cell_records))):
+                        cell = cell_records[i]
+                        xx = [pt[0] for pt in t["hist"]]
+                        yy = [pt[1] for pt in t["hist"]]
+                        if len(xx) == 0: continue
+                        # Assign if the final position was in this cell
+                        if x0 <= xx[-1] <= x1 and y0 <= yy[-1] <= y1:
+                            cell["heads"] += 1
+                            break  # Only in one box at most
 
-                # count heads per cell
-                for tinfo in tracks:
-                    (xh, yh) = tinfo["pos"]
-                    ci = cell_index_for(xh, yh)
-                    cell_records[ci]["heads"] += 1
+            prev_count = curr_count
+            processed += 1
+            render_prog(processed / total_steps, processed, total_steps)
 
-                for tinfo in tracks:
-                    (xh, yh) = tinfo["pos"]; rhead = max(2.0, tinfo.get("r", 6.0))
-                    if len(tinfo["hist"]) < (window_frames + 1):
-                        tinfo["down_streak"] = 0
-                        continue
-
-                    y_then = tinfo["hist"][max(0, len(tinfo["hist"])-1-window_frames)][1]
-                    dy = (yh - y_then)
-                    dy_norm_abs = float(dy) / max(1.0, float(H))
-
-                    y_med = neighbors_y_median(xh, yh, rhead)
-                    rel_drop_rad = (yh - y_med) / rhead
-
-                    x0r = int(max(0, xh - 1.2*rhead)); x1r = int(min(W, xh + 1.2*rhead))
-                    yh0 = int(max(0, yh - 1.0*rhead)); yh1 = int(min(H, yh + 0.5*rhead))
-                    yt0 = int(max(0, yh + 0.5*rhead)); yt1 = int(min(H, yh + 3.0*rhead))
-                    torso_flow = float(down_mag[yt0:yt1, x0r:x1r].mean()) if yt1>yt0 else 0.0
-                    head_flow  = float(down_mag[yh0:yh1, x0r:x1r].mean()) if yh1>yh0 else 0.0
-                    torso_ratio = (torso_flow + 1e-6) / (head_flow + 1e-6)
-                    torso_scene = (torso_flow + 1e-6) / scene_mean_flow
-
-                    # STRONGER joint condition: head drop + relative drop + torso motion dominance
-                    cond_drop  = (dy_norm_abs >= HEAD_DOWN_MIN_DY_FRAC) or (dy >= HEAD_DOWN_MIN_DY_RAD * rhead)
-                    cond_rel   = (rel_drop_rad >= NEIGH_REL_MIN_RAD)
-                    cond_torso = (torso_ratio >= TORSO_RATIO_MIN) and (torso_scene >= TORSO_SCENE_MIN)
-
-                    if cond_drop and cond_rel and cond_torso:
-                        tinfo["down_streak"] = min(streak_frames+3, tinfo.get("down_streak", 0) + 1)
-                    else:
-                        tinfo["down_streak"] = max(0, tinfo.get("down_streak", 0) - 1)
-
-                    if tinfo["down_streak"] >= streak_frames:
-                        any_head_and_torso_down = True
-                        ht_cand_count += 1
-                        ci = cell_index_for(xh, yh)
-                        rec = cell_records[ci]
-                        rec["cand"] += 1
-                        rec["sum_dy_norm"] += dy_norm_abs
-                        rec["max_dy_norm"] = max(rec["max_dy_norm"], dy_norm_abs)
-                        rec["torso_flow_accum"] += (torso_flow + 1e-6) / (scene_mean_flow + 1e-6)
-
-                # fill cnn_cell & compute risk
-                for rec in cell_records:
-                    (x0c,y0c,x1c,y1c) = (rec["x0"], rec["y0"], rec["x1"], rec["y1"])
-                    rec["cnn_cell"] = float(cam_up[y0c:y1c, x0c:x1c].mean()) if cam_up is not None else 0.0
-
-                    heads_in_cell = max(1, rec["heads"])
-                    down_in_cell  = rec["cand"]
-                    frac_down     = float(down_in_cell) / float(heads_in_cell)
-
-                    penalty = 0.0
-                    if frac_down > MASS_DROP_PENALTY_START:
-                        scale = min(1.0, (frac_down - MASS_DROP_PENALTY_START) / (1.0 - MASS_DROP_PENALTY_START))
-                        penalty = MASS_DROP_PENALTY_STRENGTH * scale
-
-                    hd_score = (down_in_cell + rec["sum_dy_norm"] + 0.5*rec["max_dy_norm"])
-                    flow_norm = (rec["torso_flow_accum"] / max(1, down_in_cell)) if down_in_cell>0 else 0.0
-                    risk_raw = (W_HEADDOWN * hd_score) + (W_FLOW * flow_norm) + (W_CAM * rec["cnn_cell"])
-                    rec["risk"] = risk_raw * (1.0 - penalty)
-
-                cands = [i for i,rc in enumerate(cell_records) if rc["cand"] > 0]
-                best_i = max(cands, key=lambda i: cell_records[i]["risk"]) if cands else \
-                         max(range(len(cell_records)), key=lambda i: cell_records[i]["risk"])
-                best = cell_records[best_i]
-                bx0,by0,bx1,by1 = best["x0"], best["y0"], best["x1"], best["y1"]
-                best_risk = best["risk"]
-
-                if (current_best is None) or (best_risk > float(current_best["risk_score"])) or (current_best and current_best.get("event_id") != event_id):
-                    current_best = {
-                        "event_id": event_id,
-                        "frame": frame_bgr.copy(),
-                        "frame_index": f,
-                        "timecode": sec_to_tc(f / fps),
-                        "zone_id": best["cell_id"],
-                        "x0": bx0, "y0": by0, "x1": bx1, "y1": by1,
-                        "risk_score": best_risk
-                    }
-
-                for rc in cell_records:
-                    events_z_rows.append({
-                        "event_id": event_id, "frame": f, "timecode": sec_to_tc(f / fps), "zone_id": rc["cell_id"],
-                        "x0": rc["x0"], "y0": rc["y0"], "x1": rc["x1"], "y1": rc["y1"],
-                        "risk_score": rc["risk"],
-                        "cand": rc["cand"],
-                        "sum_dy_norm": rc["sum_dy_norm"],
-                        "max_dy_norm": rc["max_dy_norm"],
-                        "heads_in_cell": rc["heads"],
-                        "cnn_cell": rc["cnn_cell"],
-                    })
-
-            heads_torso_label = 1 if any_head_and_torso_down else 0
-
-            # ---------- FINAL LABEL LOGIC ----------
-            motion_ok = (flow_fast_frac >= FLOW_MIN_FAST_FRAC) and (flow_coh >= FLOW_MIN_COH)
-            strict_crush = 1 if (ht_cand_count >= HT_MIN_CAND and y_cnn == 1 and motion_ok) else 0
-
-            mode = (detection_mode or "Hybrid").lower()
-            if "stampede" in mode:
-                final_label = final_stamp
-            elif "crush" in mode or "surge" in mode:
-                final_label = strict_crush
-            else:
-                final_label = 1 if (final_stamp == 1 or strict_crush == 1) else 0
-
-            if QUIET_SCENE_SUPPRESS and final_label == 1:
-                quiet_scene = (flow_p95 < QUIET_P95_MAX) and (flow_fast_frac < QUIET_FAST_FRAC_MAX) and (flow_coh < QUIET_COH_MAX)
-                if quiet_scene and strict_crush == 1 and final_stamp == 0:
-                    final_label = 0
-
-            t = f / fps; tc = sec_to_tc(t)
+            # --------- Assign results for per-frame ----------------------------
             frames_rows.append((
-                f, t, tc,
-                curr_count, int(delta),
-                p_cnn, y_cnn, y_heads, heads_torso_label,
+                f, float(f) / fps, sec_to_tc(f / fps),
+                curr_count, delta,
+                p_cnn, y_cnn, y_heads, final_crush,
                 flow_mean, flow_p95, flow_coh, flow_div_out, flow_fast_frac,
-                stampede_label,
-                final_label
+                final_stamp, final_crush
             ))
 
-            if final_label == 1 and not in_event:
-                in_event, start_f, start_t = True, f, t
-                event_id += 1
-                current_best = None
-            elif final_label == 0 and in_event:
-                dur_frames = (f - start_f) // step
-                if dur_frames >= min_event_frames:
-                    end_t = (f-1) / fps
-                    events_rows.append((start_f, f-1, start_t, end_t,
-                                        sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
-                    if current_best: save_current_best()
-                in_event, start_f, start_t = False, None, None
+            # --------- Event logic ----------------------------
+            if (in_event and final_crush == 0) or (not in_event and final_crush == 1):
+                in_event = not in_event
+                if in_event:
+                    event_id += 1
+                    start_f = f
+                    start_t = float(f) / fps
 
-            processed += 1
-            if total_steps:
-                frac = min(1.0, processed/total_steps)
-                render_prog(frac, processed, total_steps)
-            last_final_label = final_label
+            if not in_event: continue
+            end_f = f + step
+            end_t = end_f / fps
+            event_dur = end_t - start_t
+            if event_dur >= min_event_sec:
+                events_rows.append((
+                    start_f, end_f, start_t, end_t,
+                    sec_to_tc(start_t), sec_to_tc(end_t), event_dur
+                ))
 
-        # Draw overlays on every frame
-        label_text = "Stampede" if last_final_label == 1 else "Safe"
-        label_color = (0, 0, 255) if last_final_label == 1 else (0, 255, 0)
-        cv2.putText(frame_bgr, label_text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, label_color, 2)
-
-        # AI Monitoring overlay
-        cv2.putText(frame_bgr, "AI Monitoring", (W - 200, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 1)
-
-        # Draw scattered dots based on motion
-        if flow_baseline.ready:
-            fast_gate = flow_baseline.mean + FLOW_MEAN_Z * flow_baseline.std
-            rows, cols = np.where(mag > fast_gate)
-            if len(rows) > 0:
-                num_dots = int(50 + 450 * flow_fast_frac)
-                num_dots = min(num_dots, len(rows))
-                indices = np.random.choice(len(rows), num_dots, replace=False)
-                for i in indices:
-                    y_dot, x_dot = rows[i], cols[i]
-                    cv2.circle(frame_bgr, (x_dot, y_dot), 2, (0, 255, 255), -1)  # yellow dots
-
-        # Draw links if enabled
-        if draw_links:
-            for t in tracks:
-                if len(t["hist"]) > 1:
-                    prev_pos = t["hist"][-2]
-                    curr_pos = t["pos"]
-                    cv2.line(frame_bgr, (int(prev_pos[0]), int(prev_pos[1])), (int(curr_pos[0]), int(curr_pos[1])), (255, 0, 0), 1)
-
-        out_video.write(frame_bgr)
-        f += 1
-
-    if in_event and start_f is not None:
-        end_t = (f-1) / fps
-        events_rows.append((start_f, f-1, start_t, end_t,
-                            sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
-        if current_best: save_current_best()
-
-    cap.release()
-    out_video.release()
-
-    # Transcode to h264
-    h264_path = labeled_path.replace(".mp4", "_h264.mp4")
-    labeled_path, ok, err = transcode_to_h264(labeled_path, h264_path, fps)
-    if not ok:
-        st.warning(f"Transcoding failed: {err}")
-
-    render_prog(1.0, total_steps, total_steps)
-    df_frames = pd.DataFrame(frames_rows[1:], columns=frames_rows[0])
-    df_events = pd.DataFrame(events_rows[1:], columns=events_rows[0])
-
-    df_events_zones = pd.DataFrame(events_z_rows) if events_z_rows else pd.DataFrame(
-        columns=["event_id","frame","timecode","zone_id","x0","y0","x1","y1",
-                 "risk_score","cand","sum_dy_norm","max_dy_norm","heads_in_cell","cnn_cell"]
-    )
-    st.session_state["video_xai"] = {"events_zones": df_events_zones, "snapshots": snapshots}
-    return df_frames, df_events, labeled_path
-
-# =============================================================================
-# Run
-# =============================================================================
-if go:
-    if not model:
-        st.error("Model not loaded.")
-    elif not uploaded:
-        st.warning("Please upload a video.")
-    else:
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded.name)[1])
-        tmp.write(uploaded.read()); tmp.close()
-        with st.spinner("Analyzing video…"):
-            df_frames, df_events, labeled_path = analyze_video(
-                tmp.name, model, detection_mode=detection_mode
-            )
-        st.session_state["video_results"] = {
-            "df_frames": df_frames,
-            "df_events": df_events,
-            "labeled_path": labeled_path,
-        }
-        st.session_state["detection_mode_label"] = detection_mode
-        st.session_state["render_nonce"] = str(int(time.time() * 1e6))
-        render_results(df_frames, df_events, labeled_path, key_seed=st.session_state["render_nonce"])
-
+        # Save snapshots
+        save_current_best()
+        # Close video outputs
+        out_video.release()
+    return frames_rows, events_rows, labeled_path, snapshots
