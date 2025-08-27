@@ -515,7 +515,6 @@ def make_grid(W, H, rows=6, cols=6):
             x0, y0 = c*cell_w, r*cell_h
             x1 = W if c == cols-1 else (c+1)*cell_w
             y1 = H if r == rows-1 else (r+1)*cell_h
-            boxes.append(((x0წ
             # Normalizing grid coordinates for storage
             boxes.append((
                 (float(x0)/W, float(y0)/H, float(x1)/W, float(y1)/H),  # Store normalized
@@ -1356,5 +1355,6 @@ if go:
         st.session_state["detection_mode_label"] = detection_mode
         st.session_state["render_nonce"] = str(int(time.time() * 1e6))
         render_results(df_frames, df_events, labeled_path, key_seed=st.session_state["render_nonce"])
+
 
 
