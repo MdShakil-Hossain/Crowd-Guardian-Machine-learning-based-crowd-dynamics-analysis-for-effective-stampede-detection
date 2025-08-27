@@ -137,8 +137,6 @@ st.markdown(
           var(--bg) !important;
       }
       header{visibility:hidden;} [data-testid="stToolbar"]{display:none;} #MainMenu{visibility:hidden;} footer{visibility:hidden;}
-
-      /* ---------------- Hero ---------------- */
       .cg-hero {
         position: relative;
         margin-top: 8px; padding: 30px 32px 32px 128px;   /* left padding reserves space for logo */
@@ -156,36 +154,30 @@ st.markdown(
       }
       .cg-title  {font-size: 2.75rem; line-height: 1.08; margin: 0 0 .35rem 0; letter-spacing:.1px;}
       .cg-subtle {opacity:.95; margin:0; font-size: 1.08rem;}
-
       .cg-h2 {text-align:center; margin: 1.1rem 0 .7rem 0; font-size:1.35rem;}
       .cg-card {border: 1px solid var(--muted2); border-radius: 16px; padding: 14px 16px;
                 background: rgba(15,23,42,.45); box-shadow: 0 10px 30px rgba(0,0,0,.25);}
-
       .cg-center {display:flex; justify-content:center; margin-top:.6rem;}
       .pill {display:inline-block; padding:3px 12px; border-radius:999px; font-size:12px;
              border:1px solid var(--muted); background: rgba(30,41,59,.55)}
       .ok   {background: rgba(16,185,129,.18); color:#a7f3d0; border-color: rgba(16,185,129,.35)}
       .err  {background: rgba(239,68,68,.18); color:#fecaca; border-color: rgba(239,68,68,.35)}
-
       .stButton>button {
         width: 100%; padding: 12px 14px; border-radius: 12px; font-weight: 700; border: 0; color: #fff;
         background: linear-gradient(90deg, var(--accent), var(--accent2));
         box-shadow: 0 8px 24px rgba(249,115,22,.35);
       }
       .stButton>button:hover {filter: brightness(1.07)}
-
       [data-testid="stSidebar"] {min-width: 330px; max-width: 360px; border-right: 1px solid var(--muted2);}
       [data-testid="stSidebar"] > div:first-child {
         background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 60%, #182234 100%); color: var(--text);
       }
       .sb-brand { font-weight: 700; font-size: 1.10rem; letter-spacing:.2px; margin: 12px 14px 10px 14px; }
-
       .sb-card { border:1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.04);
                  border-radius: 14px; padding: 12px 14px; margin: 12px; }
       .sb-small {font-size:12px; opacity:.85;}
       .sb-card ul, .sb-card ol {padding-left: 1.05rem; margin: .25rem 0 0 0;}
       .sb-card li {margin-bottom: 6px;}
-
       .capstone-badge {
         display:inline-flex; align-items:center; gap:8px; margin-bottom:10px;
         background: linear-gradient(90deg, rgba(239,68,68,.18), rgba(249,115,22,.18));
@@ -199,7 +191,6 @@ st.markdown(
       .cap-name {font-weight:600;}
       .cap-id {opacity:.85;}
       .divider {height:1px; background:rgba(255,255,255,.06); margin:10px 0;}
-
       .status-banner{
         display:flex; align-items:center; justify-content:center;
         gap:10px; height:52px; border-radius:12px; margin:12px 0;
@@ -211,10 +202,8 @@ st.markdown(
       .status-ok{  background: linear-gradient(90deg, rgba(239,68,68,.22), rgba(249,115,22,.22)); color:#ffe5d5; }
       .status-safe{background: linear-gradient(90deg, rgba(16,185,129,.22), rgba(59,130,246,.22)); color:#dcfce7; }
       .status-ok .status-dot{background:#ef4444;} .status-safe .status-dot{background:#10b981;}
-
       .stDataFrame {border-radius: 10px; overflow:hidden; border:1px solid var(--muted2);}
       [data-testid="stFileUploadDropzone"]{ margin-top: 0 !important; }
-
       /* --------- Custom progress bar (single gradient bar) ---------- */
       .cg-prog-label{margin:6px 4px 6px; font-weight:700; letter-spacing:.2px;}
       .cg-prog-track{height:12px; border-radius:999px; background:rgba(255,255,255,.08);
@@ -507,14 +496,10 @@ def make_grid(W, H, rows=6, cols=6):
     boxes = []
     for r in range(rows):
         for c in range(cols):
-            x0, y0 = c * cell_w, r * cell_h
-            x1 = W if c == cols - 1 else (c + 1) * cell_w
-            y1 = H if r == rows - 1 else (r + 1) * cell_h
-            # Store normalized coordinates for consistency
-            boxes.append((
-                (float(x0) / W, float(y0) / H, float(x1) / W, float(y1) / H),  # Normalized
-                f"r{r}c{c}"
-            ))
+            x0, y0 = c*cell_w, r*cell_h
+            x1 = W if c == cols-1 else (c+1)*cell_w
+            y1 = H if r == rows-1 else (r+1)*cell_h
+            boxes.append(((x0, y0, x1, y1), f"r{r}c{c}"))
     return boxes, cell_w, cell_h
 
 def _show_image_resilient(path: str, caption: str) -> bool:
@@ -674,7 +659,8 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
             line_fp95  = base.mark_line(strokeDash=[4,4]).encode(
                 x='frame_index:Q', y=alt.Y('flow_p95:Q', title=None)
             )
-            st.altair_chart((line_fmean + line_fp95).interactive(), use_container_width=True)
+            st.altair_chart((line_fmean + line_fp95).interact
+ive(), use_container_width=True)
         with right2:
             st.subheader("Flow Coherence")
             line_coh = base.mark_line().encode(
@@ -728,7 +714,6 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
         snap_rows = []
         for s in snapshots:
             path = s.get("path") or ""
-            # --------- NOTE: NO RISK IN CAPTION (as requested) ----------
             caption = f"Event {s.get('event_id','?')} • frame {s.get('frame_index','?')} • {s.get('timecode','?')} • {s.get('zone_id','?')}"
             if isinstance(path, str) and os.path.exists(path) and os.path.getsize(path) > 0:
                 col1, col2 = st.columns([2,1])
@@ -744,7 +729,6 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
                                            key=f"dl_snap_{uid}_{s.get('event_id','x')}_{s.get('frame_index','y')}")
             else:
                 st.warning(f"Snapshot file missing for event {s.get('event_id','?')} (path: {path})")
-            # keep risk values in CSVs if you still need them downstream; not shown in UI
             snap_rows.append({
                 "event_id": s.get("event_id"),
                 "frame_index": s.get("frame_index"),
@@ -899,7 +883,7 @@ def analyze_video(
             f'''
             <div class="cg-prog">
               <div class="cg-prog-label">Processing frames… <b>{pct}%</b> ({processed}/{total})</div>
-            <div class="cg-prog-track"><div class="cg-prog-fill" style="width:{pct}%"></div></div>
+              <div class="cg-prog-track"><div class="cg-prog-fill" style="width:{pct}%"></div></div>
             </div>
             ''',
             unsafe_allow_html=True
@@ -907,54 +891,48 @@ def analyze_video(
 
     render_prog(0.0, 0, total_steps)
 
-    # helper to save the best snapshot per event — WITH bounding box
+    # helper to save the best snapshot per event — WITH refined bounding box
     def save_current_best():
         nonlocal current_best, snapshots
         if not current_best: return
         frame = current_best.pop("frame", None)
         if frame is None:
             current_best = None; return
-
-        # Get frame dimensions
-        frame_h, frame_w = frame.shape[:2]
-
-        # Scale normalized coordinates back to pixel values
+        
         candidates = current_best.get("candidates", [])
         if candidates:
-            # Scale candidate coordinates
-            scaled_candidates = []
-            for c in candidates:
-                scaled_c = {
-                    'x0': int(c['x0'] * frame_w),
-                    'y0': int(c['y0'] * frame_h),
-                    'x1': int(c['x1'] * frame_w),
-                    'y1': int(c['y1'] * frame_h)
-                }
-                scaled_candidates.append(scaled_c)
-            # Compute bounding box around scaled candidates
-            min_x = min(c['x0'] for c in scaled_candidates)
-            min_y = min(c['y0'] for c in scaled_candidates)
-            max_x = max(c['x1'] for c in scaled_candidates)
-            max_y = max(c['y1'] for c in scaled_candidates)
-            # Ensure coordinates are within frame bounds
-            min_x = max(0, min(min_x, frame_w - 1))
-            min_y = max(0, min(min_y, frame_h - 1))
-            max_x = max(0, min(max_x, frame_w - 1))
-            max_y = max(0, min(max_y, frame_h - 1))
+            min_x = min(c['x0'] for c in candidates)
+            min_y = min(c['y0'] for c in candidates)
+            max_x = max(c['x1'] for c in candidates)
+            max_y = max(c['y1'] for c in candidates)
+            # Ensure box is not too large
+            box_area = (max_x - min_x) * (max_y - min_y)
+            frame_area = W * H
+            if box_area > 0.5 * frame_area:  # Prevent overly large boxes
+                cx = (min_x + max_x) // 2
+                cy = (min_y + max_y) // 2
+                size = int(min(W, H) * 0.1)  # Fixed size around centroid
+                min_x, max_x = cx - size, cx + size
+                min_y, max_y = cy - size, cy + size
             cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), (0, 0, 255), 2)
         else:
-            # Scale zone box coordinates
-            x0 = int(current_best["x0"] * frame_w)
-            y0 = int(current_best["y0"] * frame_h)
-            x1 = int(current_best["x1"] * frame_w)
-            y1 = int(current_best["y1"] * frame_h)
-            # Ensure coordinates are within frame bounds
-            x0 = max(0, min(x0, frame_w - 1))
-            y0 = max(0, min(y0, frame_h - 1))
-            x1 = max(0, min(x1, frame_w - 1))
-            y1 = max(0, min(y1, frame_h - 1))
-            cv2.rectangle(frame, (x0, y0), (x1, y1), (0, 0, 255), 2)  # fallback to zone box
-
+            # Fallback: Use centroid of detected heads
+            heads = [(t["pos"][0], t["pos"][1]) for t in tracks]
+            if heads:
+                cx = int(sum(x for x, _ in heads) / len(heads))
+                cy = int(sum(y for _, y in heads) / len(heads))
+                size = int(min(W, H) * 0.1)
+                min_x, max_x = cx - size, cx + size
+                min_y, max_y = cy - size, cy + size
+                cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), (0, 0, 255), 2)
+            else:
+                # Last resort: Small central box
+                size = int(min(W, H) * 0.05)
+                cx, cy = W // 2, H // 2
+                min_x, max_x = cx - size, cx + size
+                min_y, max_y = cy - size, cy + size
+                cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), (0, 0, 255), 2)
+        
         snap_path = os.path.join(out_dir, f"{base}_{stamp}_event{current_best['event_id']}_snapshot.jpg")
         ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
         if ok:
@@ -966,10 +944,7 @@ def analyze_video(
                 "frame_index": current_best["frame_index"],
                 "timecode": current_best["timecode"],
                 "zone_id": current_best["zone_id"],
-                "x0": current_best["x0"],  # Store normalized
-                "y0": current_best["y0"],
-                "x1": current_best["x1"],
-                "y1": current_best["y1"],
+                "x0": min_x, "y0": min_y, "x1": max_x, "y1": max_y,
                 "risk_score": float(current_best["risk_score"]),
                 "path": snap_path
             })
@@ -1088,11 +1063,8 @@ def analyze_video(
 
                 cell_records = []
                 for ((x0,y0,x1,y1), cid) in grid_boxes:
-                    # Store normalized grid coordinates
                     cell_records.append({
-                        "cell_id": cid,
-                        "x0": float(x0)/W, "y0": float(y0)/H,
-                        "x1": float(x1)/W, "y1": float(y1)/H,
+                        "cell_id": cid, "x0": x0, "y0": y0, "x1": x1, "y1": y1,
                         "cand": 0, "sum_dy_norm": 0.0, "max_dy_norm": 0.0,
                         "torso_flow_accum": 0.0, "cnn_cell": 0.0, "heads": 0
                     })
@@ -1141,7 +1113,15 @@ def analyze_video(
                     torso_ratio = (torso_flow + 1e-6) / (head_flow + 1e-6)
                     torso_scene = (torso_flow + 1e-6) / scene_mean_flow
 
-                    # STRONGER joint condition: head drop + relative drop + torso motion
+                    # compute speed
+                    speed = 0.0
+                    if len(tinfo["hist"]) > 1:
+                        prev_x, prev_y, _ = tinfo["hist"][-2]
+                        dx = xh - prev_x
+                        dy = yh - prev_y
+                        speed = np.sqrt(dx**2 + dy**2)
+
+                    # STRONGER joint condition: head drop + relative drop + torso motion dominance
                     cond_drop  = (dy_norm_abs >= HEAD_DOWN_MIN_DY_FRAC) or (dy >= HEAD_DOWN_MIN_DY_RAD * rhead)
                     cond_rel   = (rel_drop_rad >= NEIGH_REL_MIN_RAD)
                     cond_torso = (torso_ratio >= TORSO_RATIO_MIN) and (torso_scene >= TORSO_SCENE_MIN)
@@ -1160,11 +1140,10 @@ def analyze_video(
                         rec["sum_dy_norm"] += dy_norm_abs
                         rec["max_dy_norm"] = max(rec["max_dy_norm"], dy_norm_abs)
                         rec["torso_flow_accum"] += (torso_flow + 1e-6) / (scene_mean_flow + 1e-6)
-                        # Store normalized candidate coordinates
-                        candidates.append({
-                            "x0": float(x0r)/W, "y0": float(yh0)/H,
-                            "x1": float(x1r)/W, "y1": float(yt1)/H
-                        })
+                        candidates.append({"x0": int(x0r), "y0": int(yh0), "x1": int(x1r), "y1": int(yt1)})
+
+                    if speed > fast_gate and stampede_label == 1:
+                        candidates.append({"x0": int(x0r), "y0": int(yh0), "x1": int(x1r), "y1": int(yt1)})
 
                 # fill cnn_cell & compute risk
                 for rec in cell_records:
@@ -1199,7 +1178,7 @@ def analyze_video(
                         "frame_index": f,
                         "timecode": sec_to_tc(f / fps),
                         "zone_id": best["cell_id"],
-                        "x0": bx0, "y0": by0, "x1": bx1, "y1": by1,  # Normalized coordinates
+                        "x0": bx0, "y0": by0, "x1": bx1, "y1": by1,
                         "risk_score": best_risk,
                         "candidates": candidates.copy()
                     }
