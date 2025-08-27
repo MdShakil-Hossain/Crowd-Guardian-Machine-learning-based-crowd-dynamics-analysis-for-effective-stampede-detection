@@ -870,6 +870,10 @@ def analyze_video(
     window_frames = max(1, int(round(HEAD_DOWN_WINDOW_SEC * (fps/step))))
     streak_frames = max(2, int(round(HEAD_DOWN_MIN_STREAK_SEC * (fps/step))))
 
+    # Bounding box state for video overlay
+    event_boxes = {}  # Store bounding boxes per event_id
+    global_offset = np.array([0.0, 0.0])  # Cumulative camera motion offset
+
     # --------- Custom progress (single gradient bar) ----------
     prog_box = st.empty()
     processed = 0
@@ -913,6 +917,8 @@ def analyze_video(
                 min_x, max_x = cx - size, cx + size
                 min_y, max_y = cy - size, cy + size
             cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), (0, 0, 255), 2)
+            # Store box for video overlay
+            event_boxes[current_best["event_id"]] = (min_x, min_y, max_x, max_y)
         else:
             # Fallback: Use centroid of detected heads
             heads = [(t["pos"][0], t["pos"][1]) for t in tracks]
@@ -923,6 +929,7 @@ def analyze_video(
                 min_x, max_x = cx - size, cx + size
                 min_y, max_y = cy - size, cy + size
                 cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), (0, 0, 255), 2)
+                event_boxes[current_best["event_id"]] = (min_x, min_y, max_x, max_y)
             else:
                 # Last resort: Small central box
                 size = int(min(W, H) * 0.05)
@@ -930,6 +937,7 @@ def analyze_video(
                 min_x, max_x = cx - size, cx + size
                 min_y, max_y = cy - size, cy + size
                 cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), (0, 0, 255), 2)
+                event_boxes[current_best["event_id"]] = (min_x, min_y, max_x, max_y)
         
         snap_path = os.path.join(out_dir, f"{base}_{stamp}_event{current_best['event_id']}_snapshot.jpg")
         ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
@@ -970,10 +978,11 @@ def analyze_video(
                     fx = flow_full[..., 0].astype(np.float32)
                     fy = flow_full[..., 1].astype(np.float32)
 
-                    # ---- camera-shake compensation (remove global drift) ----
+                    # ---- Camera motion compensation ----
                     gx, gy = np.median(fx), np.median(fy)
                     fx = fx - gx
                     fy = fy - gy
+                    global_offset += np.array([gx, gy])  # Accumulate global offset
 
                     mag, ang = cv2.cartToPolar(fx, fy, angleInDegrees=False)
 
@@ -1268,6 +1277,16 @@ def analyze_video(
                     prev_pos = t["hist"][-2]
                     curr_pos = t["pos"]
                     cv2.line(frame_bgr, (int(prev_pos[0]), int(prev_pos[1])), (int(curr_pos[0]), int(curr_pos[1])), (255, 0, 0), 1)
+
+        # Draw bounding box for current event, adjusted for camera motion
+        if in_event and event_id in event_boxes:
+            x0, y0, x1, y1 = event_boxes[event_id]
+            # Adjust box coordinates by the negative of the cumulative camera offset
+            adj_x0 = int(max(0, min(W-1, x0 - global_offset[0])))
+            adj_y0 = int(max(0, min(H-1, y0 - global_offset[1])))
+            adj_x1 = int(max(0, min(W-1, x1 - global_offset[0])))
+            adj_y1 = int(max(0, min(H-1, y1 - global_offset[1])))
+            cv2.rectangle(frame_bgr, (adj_x0, adj_y0), (adj_x1, adj_y1), (0, 0, 255), 2)
 
         out_video.write(frame_bgr)
         f += 1
