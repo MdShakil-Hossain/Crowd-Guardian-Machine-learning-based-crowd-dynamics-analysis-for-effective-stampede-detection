@@ -257,7 +257,7 @@ _safe_html("""
 """, height=48, key="bg_particles_iframe", scrolling=False, width=0)
 
 # =============================================================================
-# Sidebar — PROJECT DETAILS + Detection Mode (UNCHANGED UI)
+# Sidebar — PROJECT DETAILS + Detection Mode
 # =============================================================================
 with st.sidebar:
     st.markdown('<div class="sb-brand">🛡️ Crowd Guardian</div>', unsafe_allow_html=True)
@@ -865,14 +865,14 @@ def analyze_video(
     snapshots = []
     current_best = None
 
-    # NEW: track heads over time for head-down
+    # Track heads over time for head-down
     tracks = []
     window_frames = max(1, int(round(HEAD_DOWN_WINDOW_SEC * (fps/step))))
     streak_frames = max(2, int(round(HEAD_DOWN_MIN_STREAK_SEC * (fps/step))))
 
-    # Bounding box state for video overlay
-    event_boxes = {}  # Store bounding boxes per event_id
-    global_offset = np.array([0.0, 0.0])  # Cumulative camera motion offset
+    # Track bounding box for events, adjusted for camera motion
+    current_bbox = None  # (x0, y0, x1, y1)
+    cumulative_dx, cumulative_dy = 0.0, 0.0  # Track cumulative camera motion
 
     # --------- Custom progress (single gradient bar) ----------
     prog_box = st.empty()
@@ -895,49 +895,35 @@ def analyze_video(
 
     # helper to save the best snapshot per event — WITH refined bounding box
     def save_current_best():
-        nonlocal current_best, snapshots
+        nonlocal current_best, snapshots, cumulative_dx, cumulative_dy
         if not current_best: return
         frame = current_best.pop("frame", None)
         if frame is None:
             current_best = None; return
         
-        candidates = current_best.get("candidates", [])
-        if candidates:
-            min_x = min(c['x0'] for c in candidates)
-            min_y = min(c['y0'] for c in candidates)
-            max_x = max(c['x1'] for c in candidates)
-            max_y = max(c['y1'] for c in candidates)
-            # Ensure box is not too large
-            box_area = (max_x - min_x) * (max_y - min_y)
-            frame_area = W * H
-            if box_area > 0.5 * frame_area:  # Prevent overly large boxes
-                cx = (min_x + max_x) // 2
-                cy = (min_y + max_y) // 2
-                size = int(min(W, H) * 0.1)  # Fixed size around centroid
-                min_x, max_x = cx - size, cx + size
-                min_y, max_y = cy - size, cy + size
+        # Use current_best coordinates directly for bounding box
+        min_x, min_y, max_x, max_y = current_best["x0"], current_best["y0"], current_best["x1"], current_best["y1"]
+        # Adjust for cumulative camera motion
+        min_x, max_x = int(min_x + cumulative_dx), int(max_x + cumulative_dx)
+        min_y, max_y = int(min_y + cumulative_dy), int(max_y + cumulative_dy)
+        # Clamp to frame boundaries
+        min_x, max_x = max(0, min_x), min(W, max_x)
+        min_y, max_y = max(0, min_y), min(H, max_y)
+        # Ensure box is not too large
+        box_area = (max_x - min_x) * (max_y - min_y)
+        frame_area = W * H
+        if box_area > 0.5 * frame_area:  # Prevent overly large boxes
+            cx = (min_x + max_x) // 2
+            cy = (min_y + max_y) // 2
+            size = int(min(W, H) * 0.1)  # Fixed size around centroid
+            min_x, max_x = cx - size, cx + size
+            min_y, max_y = cy - size, cy + size
+            # Re-clamp after resizing
+            min_x, max_x = max(0, min_x), min(W, max_x)
+            min_y, max_y = max(0, min_y), min(H, max_y)
+        # Draw bounding box
+        if max_x > min_x and max_y > min_y:
             cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), (0, 0, 255), 2)
-            # Store box for video overlay
-            event_boxes[current_best["event_id"]] = (min_x, min_y, max_x, max_y)
-        else:
-            # Fallback: Use centroid of detected heads
-            heads = [(t["pos"][0], t["pos"][1]) for t in tracks]
-            if heads:
-                cx = int(sum(x for x, _ in heads) / len(heads))
-                cy = int(sum(y for _, y in heads) / len(heads))
-                size = int(min(W, H) * 0.1)
-                min_x, max_x = cx - size, cx + size
-                min_y, max_y = cy - size, cy + size
-                cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), (0, 0, 255), 2)
-                event_boxes[current_best["event_id"]] = (min_x, min_y, max_x, max_y)
-            else:
-                # Last resort: Small central box
-                size = int(min(W, H) * 0.05)
-                cx, cy = W // 2, H // 2
-                min_x, max_x = cx - size, cx + size
-                min_y, max_y = cy - size, cy + size
-                cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), (0, 0, 255), 2)
-                event_boxes[current_best["event_id"]] = (min_x, min_y, max_x, max_y)
         
         snap_path = os.path.join(out_dir, f"{base}_{stamp}_event{current_best['event_id']}_snapshot.jpg")
         ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
@@ -969,6 +955,7 @@ def analyze_video(
             flow_mean = flow_p95 = flow_coh = flow_div_out = flow_fast_frac = 0.0
             stampede_label = 0
             mag = np.zeros((H, W), dtype=np.float32)
+            gx, gy = 0.0, 0.0  # Camera motion
             if prev_gray_for_metrics is not None and prev_gray_for_metrics.shape == gray.shape:
                 try:
                     flow_full = cv2.calcOpticalFlowFarneback(
@@ -978,11 +965,10 @@ def analyze_video(
                     fx = flow_full[..., 0].astype(np.float32)
                     fy = flow_full[..., 1].astype(np.float32)
 
-                    # ---- Camera motion compensation ----
+                    # ---- camera-shake compensation (remove global drift) ----
                     gx, gy = np.median(fx), np.median(fy)
                     fx = fx - gx
                     fy = fy - gy
-                    global_offset += np.array([gx, gy])  # Accumulate global offset
 
                     mag, ang = cv2.cartToPolar(fx, fy, angleInDegrees=False)
 
@@ -1013,6 +999,10 @@ def analyze_video(
                 except cv2.error:
                     pass
             prev_gray_for_metrics = gray.copy()
+
+            # Update cumulative camera motion
+            cumulative_dx += gx
+            cumulative_dy += gy
 
             # --- Heads detection & tracking for crush/surge (collapse) ---
             head_pts, head_radii = detect_heads_gray(gray, detector)
@@ -1052,7 +1042,6 @@ def analyze_video(
                                 prev_gray_for_flow, gray, None,
                                 0.5, 3, 15, 3, 5, 1.2, 0
                             )
-                            # remove global camera motion for torso metric
                             vx = flow[..., 0]
                             vy = flow[..., 1]
                             gx, gy = np.median(vx), np.median(vy)
@@ -1231,10 +1220,28 @@ def analyze_video(
                 final_label
             ))
 
+            # Update bounding box for the current event
             if final_label == 1 and not in_event:
                 in_event, start_f, start_t = True, f, t
                 event_id += 1
                 current_best = None
+                # Initialize bounding box from best cell
+                min_x, min_y, max_x, max_y = bx0, by0, bx1, by1
+                # Ensure box is not too large
+                box_area = (max_x - min_x) * (max_y - min_y)
+                frame_area = W * H
+                if box_area > 0.5 * frame_area:
+                    cx = (min_x + max_x) // 2
+                    cy = (min_y + max_y) // 2
+                    size = int(min(W, H) * 0.1)
+                    min_x, max_x = cx - size, cx + size
+                    min_y, max_y = cy - size, cy + size
+                # Clamp to frame boundaries
+                min_x, max_x = max(0, min_x), min(W, max_x)
+                min_y, max_y = max(0, min_y), min(H, max_y)
+                current_bbox = (min_x, min_y, max_x, max_y)
+                # Reset cumulative motion at start of event
+                cumulative_dx, cumulative_dy = 0.0, 0.0
             elif final_label == 0 and in_event:
                 dur_frames = (f - start_f) // step
                 if dur_frames >= min_event_frames:
@@ -1243,6 +1250,8 @@ def analyze_video(
                                         sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
                     if current_best: save_current_best()
                 in_event, start_f, start_t = False, None, None
+                current_bbox = None
+                cumulative_dx, cumulative_dy = 0.0, 0.0
 
             processed += 1
             if total_steps:
@@ -1278,65 +1287,79 @@ def analyze_video(
                     curr_pos = t["pos"]
                     cv2.line(frame_bgr, (int(prev_pos[0]), int(prev_pos[1])), (int(curr_pos[0]), int(curr_pos[1])), (255, 0, 0), 1)
 
-        # Draw bounding box for current event, adjusted for camera motion
-        if in_event and event_id in event_boxes:
-            x0, y0, x1, y1 = event_boxes[event_id]
-            # Adjust box coordinates by the negative of the cumulative camera offset
-            adj_x0 = int(max(0, min(W-1, x0 - global_offset[0])))
-            adj_y0 = int(max(0, min(H-1, y0 - global_offset[1])))
-            adj_x1 = int(max(0, min(W-1, x1 - global_offset[0])))
-            adj_y1 = int(max(0, min(H-1, y1 - global_offset[1])))
-            cv2.rectangle(frame_bgr, (adj_x0, adj_y0), (adj_x1, adj_y1), (0, 0, 255), 2)
+        # Draw bounding box if in event, adjusted for camera motion
+        if in_event and current_bbox:
+            x0, y0, x1, y1 = current_bbox
+            # Adjust for current frame's camera motion
+            adj_x0 = int(x0 + cumulative_dx)
+            adj_y0 = int(y0 + cumulative_dy)
+            adj_x1 = int(x1 + cumulative_dx)
+            adj_y1 = int(y1 + cumulative_dy)
+            # Clamp to frame boundaries
+            adj_x0, adj_x1 = max(0, adj_x0), min(W, adj_x1)
+            adj_y0, adj_y1 = max(0, adj_y0), min(H, adj_y1)
+            if adj_x1 > adj_x0 and adj_y1 > adj_y0:
+                cv2.rectangle(frame_bgr, (adj_x0, adj_y0), (adj_x1, adj_y1), (0, 0, 255), 2)
 
         out_video.write(frame_bgr)
         f += 1
 
     if in_event and start_f is not None:
-        end_t = (f-1) / fps
-        events_rows.append((start_f, f-1, start_t, end_t,
-                            sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
-        if current_best: save_current_best()
+        dur_frames = (f - start_f) // step
+        if dur_frames >= min_event_frames:
+            end_t = (f-1) / fps
+            events_rows.append((start_f, f-1, start_t, end_t,
+                                sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
+            if current_best: save_current_best()
 
     cap.release()
     out_video.release()
 
-    # Transcode to h264
-    h264_path = labeled_path.replace(".mp4", "_h264.mp4")
-    labeled_path, ok, err = transcode_to_h264(labeled_path, h264_path, fps)
-    if not ok:
-        st.warning(f"Transcoding failed: {err}")
+    # Transcode
+    final_path, ok, msg = transcode_to_h264(labeled_path, labeled_path + ".h264.mp4", fps)
+    if ok:
+        if final_path != labeled_path and os.path.exists(labeled_path):
+            os.remove(labeled_path)
+        os.rename(final_path, labeled_path)
 
-    render_prog(1.0, total_steps, total_steps)
     df_frames = pd.DataFrame(frames_rows[1:], columns=frames_rows[0])
     df_events = pd.DataFrame(events_rows[1:], columns=events_rows[0])
+    df_events_zones = pd.DataFrame(events_z_rows)
 
-    df_events_zones = pd.DataFrame(events_z_rows) if events_z_rows else pd.DataFrame(
-        columns=["event_id","frame","timecode","zone_id","x0","y0","x1","y1",
-                 "risk_score","cand","sum_dy_norm","max_dy_norm","heads_in_cell","cnn_cell"]
-    )
-    st.session_state["video_xai"] = {"events_zones": df_events_zones, "snapshots": snapshots}
+    # Store results
+    st.session_state["video_results"] = {
+        "df_frames": df_frames,
+        "df_events": df_events,
+        "labeled_path": labeled_path,
+    }
+    st.session_state["video_xai"] = {
+        "events_zones": df_events_zones,
+        "snapshots": snapshots
+    }
+    st.session_state["detection_mode_label"] = detection_mode
+
     return df_frames, df_events, labeled_path
 
 # =============================================================================
-# Run
+# Process uploaded video
 # =============================================================================
-if go:
-    if not model:
-        st.error("Model not loaded.")
-    elif not uploaded:
-        st.warning("Please upload a video.")
-    else:
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded.name)[1])
-        tmp.write(uploaded.read()); tmp.close()
+if go and uploaded and model:
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+        tmp.write(uploaded.read())
+        tmp_path = tmp.name
+
+    try:
         with st.spinner("Analyzing video…"):
             df_frames, df_events, labeled_path = analyze_video(
-                tmp.name, model, detection_mode=detection_mode
+                tmp_path, model, detection_mode=detection_mode
             )
-        st.session_state["video_results"] = {
-            "df_frames": df_frames,
-            "df_events": df_events,
-            "labeled_path": labeled_path,
-        }
-        st.session_state["detection_mode_label"] = detection_mode
-        st.session_state["render_nonce"] = str(int(time.time() * 1e6))
-        render_results(df_frames, df_events, labeled_path, key_seed=st.session_state["render_nonce"])
+        render_results(df_frames, df_events, labeled_path)
+    except Exception as e:
+        st.error(f"Analysis failed: {str(e)}")
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+elif go and not uploaded:
+    st.warning("Please upload a video file.")
+elif go and not model:
+    st.error("Model not loaded. Cannot analyze video.")
