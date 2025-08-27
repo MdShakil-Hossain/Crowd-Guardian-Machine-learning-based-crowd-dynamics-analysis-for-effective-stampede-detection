@@ -544,6 +544,20 @@ class _FlowBaseline:
         s = float(np.std(self.vals)) if self.vals else 0.0
         return max(s, 1e-6)
 
+# -------- New helper for transforming bounding boxes --------
+def transform_bbox(bbox, homography):
+    """Transform a bounding box using a homography matrix."""
+    if homography is None or bbox is None:
+        return bbox
+    x0, y0, x1, y1 = bbox
+    points = np.float32([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]).reshape(-1, 1, 2)
+    transformed_points = cv2.perspectiveTransform(points, homography)
+    x_min = int(min(transformed_points[:, :, 0]))
+    y_min = int(min(transformed_points[:, :, 1]))
+    x_max = int(max(transformed_points[:, :, 0]))
+    y_max = int(max(transformed_points[:, :, 1]))
+    return (x_min, y_min, x_max, y_max)
+
 # =============================================================================
 # Load model (silent) + status
 # =============================================================================
@@ -658,7 +672,7 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
             line_fp95  = base.mark_line(strokeDash=[4,4]).encode(
                 x='frame_index:Q', y=alt.Y('flow_p95:Q', title=None)
             )
-            st.altair_chart((line_fmean + line_fp95).interactive(), use_container_width=True)
+            st.altair_chart((line_fmean + line_fp95).interactivoe(), use_container_width=True)
         with right2:
             st.subheader("Flow Coherence")
             line_coh = base.mark_line().encode(
@@ -799,7 +813,7 @@ def update_tracks(tracks, detections, radii, max_dist, window_cap):
     return survivors
 
 # =============================================================================
-# Add boxes to video
+# Add boxes to video (Updated to keep boxes fixed in world coordinates)
 # =============================================================================
 def add_boxes_to_video(input_path, output_path, df_events, snapshots):
     cap = cv2.VideoCapture(input_path)
@@ -812,8 +826,25 @@ def add_boxes_to_video(input_path, output_path, df_events, snapshots):
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, (W, H))
 
-    # Map event_id to box
-    event_boxes = {s['event_id']: (int(s['x0']), int(s['y0']), int(s['x1']), int(s['y1'])) for s in snapshots}
+    # Initialize ORB and matcher for feature tracking
+    orb = cv2.ORB_create()
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+
+    # Map event_id to reference frame and box
+    event_boxes = {}
+    ref_frames = {}
+    ref_keypoints = {}
+    ref_descriptors = {}
+    for s in snapshots:
+        eid = s['event_id']
+        event_boxes[eid] = (int(s['x0']), int(s['y0']), int(s['x1']), int(s['y1']))
+        # Load reference frame from snapshot
+        ref_frame = cv2.imread(s['path'], cv2.IMREAD_GRAYSCALE)
+        if ref_frame is not None:
+            ref_frames[eid] = ref_frame
+            kps, descs = orb.detectAndCompute(ref_frame, None)
+            ref_keypoints[eid] = kps
+            ref_descriptors[eid] = descs
 
     # Map frame to event_id
     frame_to_event = {}
@@ -828,11 +859,25 @@ def add_boxes_to_video(input_path, output_path, df_events, snapshots):
     while True:
         ok, frame = cap.read()
         if not ok: break
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         if f in frame_to_event:
             eid = frame_to_event[f]
-            if eid in event_boxes:
-                x0, y0, x1, y1 = event_boxes[eid]
-                cv2.rectangle(frame, (x0, y0), (x1, y1), (0, 0, 255), 2)
+            if eid in event_boxes and eid in ref_frames:
+                # Compute homography to track camera movement
+                kps, descs = orb.detectAndCompute(gray, None)
+                homography = None
+                if descs is not None and ref_descriptors.get(eid) is not None:
+                    matches = bf.match(ref_descriptors[eid], descs)
+                    matches = sorted(matches, key=lambda x: x.distance)
+                    if len(matches) > 10:  # Minimum matches for robust homography
+                        src_pts = np.float32([ref_keypoints[eid][m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+                        dst_pts = np.float32([kps[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+                        homography, _ = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+                # Transform bounding box
+                transformed_bbox = transform_bbox(event_boxes[eid], homography)
+                if transformed_bbox is not None:
+                    x0, y0, x1, y1 = transformed_bbox
+                    cv2.rectangle(frame, (x0, y0), (x1, y1), (0, 0, 255), 2)
         out.write(frame)
         f += 1
 
@@ -912,6 +957,13 @@ def analyze_video(
     window_frames = max(1, int(round(HEAD_DOWN_WINDOW_SEC * (fps/step))))
     streak_frames = max(2, int(round(HEAD_DOWN_MIN_STREAK_SEC * (fps/step))))
 
+    # NEW: Initialize ORB for feature tracking in snapshots
+    orb = cv2.ORB_create()
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+    ref_frames = {}  # Store reference frame data per event
+    ref_keypoints = {}
+    ref_descriptors = {}
+
     # --------- Custom progress (single gradient bar) ----------
     prog_box = st.empty()
     processed = 0
@@ -940,6 +992,14 @@ def analyze_video(
             current_best = None; return
         
         candidates = current_best.get("candidates", [])
+        eid = current_best["event_id"]
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        kps, descs = orb.detectAndCompute(gray, None)
+        if descs is not None:
+            ref_frames[eid] = gray
+            ref_keypoints[eid] = kps
+            ref_descriptors[eid] = descs
+
         if candidates:
             min_x = min(c['x0'] for c in candidates)
             min_y = min(c['y0'] for c in candidates)
@@ -1301,71 +1361,4 @@ def analyze_video(
                 indices = np.random.choice(len(rows), num_dots, replace=False)
                 for i in indices:
                     y_dot, x_dot = rows[i], cols[i]
-                    cv2.circle(frame_bgr, (x_dot, y_dot), 2, (0, 255, 255), -1)  # yellow dots
-
-        # Draw links if enabled
-        if draw_links:
-            for t in tracks:
-                if len(t["hist"]) > 1:
-                    prev_pos = t["hist"][-2]
-                    curr_pos = t["pos"]
-                    cv2.line(frame_bgr, (int(prev_pos[0]), int(prev_pos[1])), (int(curr_pos[0]), int(curr_pos[1])), (255, 0, 0), 1)
-
-        out_video.write(frame_bgr)
-        f += 1
-
-    if in_event and start_f is not None:
-        end_t = (f-1) / fps
-        events_rows.append((event_id, start_f, f-1, start_t, end_t,
-                            sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
-        if current_best: save_current_best()
-
-    cap.release()
-    out_video.release()
-
-    render_prog(1.0, total_steps, total_steps)
-    df_frames = pd.DataFrame(frames_rows[1:], columns=frames_rows[0])
-    df_events = pd.DataFrame(events_rows[1:], columns=events_rows[0])
-
-    df_events_zones = pd.DataFrame(events_z_rows) if events_z_rows else pd.DataFrame(
-        columns=["event_id","frame","timecode","zone_id","x0","y0","x1","y1",
-                 "risk_score","cand","sum_dy_norm","max_dy_norm","heads_in_cell","cnn_cell"]
-    )
-    st.session_state["video_xai"] = {"events_zones": df_events_zones, "snapshots": snapshots}
-    return df_frames, df_events, labeled_path
-
-# =============================================================================
-# Run
-# =============================================================================
-if go:
-    if not model:
-        st.error("Model not loaded.")
-    elif not uploaded:
-        st.warning("Please upload a video.")
-    else:
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded.name)[1])
-        tmp.write(uploaded.read()); tmp.close()
-        with st.spinner("Analyzing video…"):
-            df_frames, df_events, prelim_labeled_path = analyze_video(
-                tmp.name, model, detection_mode=detection_mode
-            )
-        out_dir = os.path.join(os.getcwd(), "outputs")
-        base = os.path.splitext(os.path.basename(tmp.name))[0]
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        boxed_path = os.path.join(out_dir, f"{base}_{stamp}_labeled_with_box.mp4")
-        boxed_path = add_boxes_to_video(prelim_labeled_path, boxed_path, df_events, st.session_state["video_xai"]["snapshots"])
-        temp_cap = cv2.VideoCapture(boxed_path)
-        fps = temp_cap.get(cv2.CAP_PROP_FPS) or 30.0
-        temp_cap.release()
-        h264_path = boxed_path.replace(".mp4", "_h264.mp4")
-        labeled_path, ok, err = transcode_to_h264(boxed_path, h264_path, fps)
-        if not ok:
-            st.warning(f"Transcoding failed: {err}")
-        st.session_state["video_results"] = {
-            "df_frames": df_frames,
-            "df_events": df_events,
-            "labeled_path": labeled_path,
-        }
-        st.session_state["detection_mode_label"] = detection_mode
-        st.session_state["render_nonce"] = str(int(time.time() * 1e6))
-        render_results(df_frames, df_events, labeled_path, key_seed=st.session_state["render_nonce"])
+                    cv2.circle(frame_bgr, (x_dot, y_dot), 2,
