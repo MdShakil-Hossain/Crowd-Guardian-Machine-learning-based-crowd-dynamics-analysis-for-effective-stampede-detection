@@ -186,7 +186,7 @@ st.markdown(
       .sb-brand { font-weight: 700; font-size: 1.10rem; letter-spacing:.2px; margin: 12px 14px 10px 14px; }
 
       .sb-card { border:1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.04);
-                 border-radius: 14px; padding: 12px 14px; margin: 12px; }
+                 border-radius: 14px; padding: 12px 14px; margin: 12 hesabungan; }
       .sb-small {font-size:12px; opacity:.85;}
       .sb-card ul, .sb-card ol {padding-left: 1.05rem; margin: .25rem 0 0 0;}
       .sb-card li {margin-bottom: 6px;}
@@ -456,84 +456,52 @@ def transcode_to_h264(src_path: str, dst_path: str, fps: float):
 # =============== XAI: Grad-CAM + zone grid helpers ===========================
 def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
     import tensorflow as tf
-    if model is None:
-        return None
 
     def _select_score_vector(preds_any):
-        try:
-            t = preds_any
-            if isinstance(t, dict):
-                t = t.get(sorted(t.keys())[0], t)
-            if isinstance(t, (list, tuple)):
-                t = t[0]
-            t = tf.convert_to_tensor(t)
-            r = t.shape.rank
-            if r is None or r == 0:
-                return tf.reshape(t, (-1,))[-1:]
-            if r == 1:
-                return t
-            if r == 2:
-                c = t.shape[-1]
-                return tf.squeeze(t, axis=-1) if c == 1 else t[:, -1]
-            return tf.reshape(t, (tf.shape(t)[0], -1))[:, -1]
-        except Exception:
-            return None
+        t = preds_any
+        if isinstance(t, dict): t = t[sorted(t.keys())[0]]
+        if isinstance(t, (list, tuple)): t = t[0]
+        t = tf.convert_to_tensor(t)
+        r = t.shape.rank
+        if r is None: return tf.reshape(t, (tf.shape(t)[0], -1))[:, -1]
+        if r == 1:  return t
+        if r == 2:
+            c = t.shape[-1]
+            return tf.squeeze(t, axis=-1) if c == 1 else t[:, -1]
+        return tf.reshape(t, (tf.shape(t)[0], -1))[:, -1]
 
-    # Find the last convolutional layer
     target_layer = None
     if conv_layer_name:
         try:
             L = model.get_layer(conv_layer_name)
-            if len(L.output.shape) == 4:
-                target_layer = L
+            if len(L.output.shape) == 4: target_layer = L
         except Exception:
             pass
     if target_layer is None:
         for L in reversed(model.layers):
             try:
                 if len(L.output.shape) == 4:
-                    target_layer = L
-                    break
+                    target_layer = L; break
             except Exception:
                 continue
-    if target_layer is None:
-        return None
-
-    # Create gradient model
-    try:
-        grad_model = tf.keras.Model(
-            inputs=model.inputs if hasattr(model, 'inputs') else model.input,
-            outputs=[target_layer.output, model.output]
-        )
-    except Exception:
-        return None
-
-    # Compute gradients and heatmap
-    with tf.GradientTape(persistent=False) as tape:
-        try:
-            tape.watch(x_100x100x1)
-            conv_out, preds = grad_model(x_100x100x1, training=False)
-            score_vec = _select_score_vector(preds)
-            if score_vec is None:
-                return None
-        except Exception:
-            return None
-
-        try:
-            grads = tape.gradient(score_vec, conv_out)
-            if grads is None:
-                return None
-        except Exception:
-            return None
+    if target_layer is None: return None
 
     try:
-        weights = tf.reduce_mean(grads, axis=(1, 2), keepdims=True)
-        cam = tf.nn.relu(tf.reduce_sum(weights * conv_out, axis=-1))
-        cam = cam[0].numpy()
-        cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
-        return cam
+        grad_model = tf.keras.Model(inputs=model.input, outputs=[target_layer.output, model.output])
     except Exception:
-        return None
+        grad_model = tf.keras.Model(inputs=model.inputs, outputs=[target_layer.output, model.outputs])
+
+    with tf.GradientTape() as tape:
+        conv_out, preds = grad_model(x_100x100x1, training=False)
+        score_vec = _select_score_vector(preds)
+
+    grads = tape.gradient(score_vec, conv_out)
+    if grads is None: return None
+    weights = tf.reduce_mean(grads, axis=(1, 2), keepdims=True)
+    cam = tf.nn.relu(tf.reduce_sum(weights * conv_out, axis=-1))
+    cam = cam[0].numpy()
+    cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
+    return cam
 
 def upscale_cam(cam_small, W, H):
     if cam_small is None: return None
@@ -547,7 +515,12 @@ def make_grid(W, H, rows=6, cols=6):
             x0, y0 = c*cell_w, r*cell_h
             x1 = W if c == cols-1 else (c+1)*cell_w
             y1 = H if r == rows-1 else (r+1)*cell_h
-            boxes.append(((x0, y0, x1, y1), f"r{r}c{c}"))
+            boxes.append(((x0წ
+            # Normalizing grid coordinates for storage
+            boxes.append((
+                (float(x0)/W, float(y0)/H, float(x1)/W, float(y1)/H),  # Store normalized
+                f"r{r}c{c}"
+            ))
     return boxes, cell_w, cell_h
 
 def _show_image_resilient(path: str, caption: str) -> bool:
@@ -753,7 +726,7 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
         st.download_button("⬇️ events_zones.csv",
                            df_events_zones.to_csv(index=False).encode("utf-8"),
                            file_name="events_zones.csv", mime="text/csv",
-                           use_container_width=True, key=f"dl_events_z_{uid}")
+                           использованием_container_width=True, key=f"dl_events_z_{uid}")
 
     snapshots = extra.get("snapshots", [])
     if snapshots:
@@ -948,8 +921,45 @@ def analyze_video(
         if frame is None:
             current_best = None; return
 
-        x0, y0, x1, y1 = current_best["x0"], current_best["y0"], current_best["x1"], current_best["y1"]
-        cv2.rectangle(frame, (x0, y0), (x1, y1), (0, 0, 255), 2)
+        # Get frame dimensions
+        frame_h, frame_w = frame.shape[:2]
+
+        # Scale normalized coordinates back to pixel values
+        candidates = current_best.get("candidates", [])
+        if candidates:
+            # Scale candidate coordinates
+            scaled_candidates = []
+            for c in candidates:
+                scaled_c = {
+                    'x0': int(c['x0'] * frame_w),
+                    'y0': int(c['y0'] * frame_h),
+                    'x1': int(c['x1'] * frame_w),
+                    'y1': int(c['y1'] * frame_h)
+                }
+                scaled_candidates.append(scaled_c)
+            # Compute bounding box around scaled candidates
+            min_x = min(c['x0'] for c in scaled_candidates)
+            min_y = min(c['y0'] for c in scaled_candidates)
+            max_x = max(c['x1'] for c in scaled_candidates)
+            max_y = max(c['y1'] for c in scaled_candidates)
+            # Ensure coordinates are within frame bounds
+            min_x = max(0, min(min_x, frame_w - 1))
+            min_y = max(0, min(min_y, frame_h - 1))
+            max_x = max(0, min(max_x, frame_w - 1))
+            max_y = max(0, min(max_y, frame_h - 1))
+            cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), (0, 0, 255), 2)
+        else:
+            # Scale zone box coordinates
+            x0 = int(current_best["x0"] * frame_w)
+            y0 = int(current_best["y0"] * frame_h)
+            x1 = int(current_best["x1"] * frame_w)
+            y1 = int(current_best["y1"] * frame_h)
+            # Ensure coordinates are within frame bounds
+            x0 = max(0, min(x0, frame_w - 1))
+            y0 = max(0, min(y0, frame_h - 1))
+            x1 = max(0, min(x1, frame_w - 1))
+            y1 = max(0, min(y1, frame_h - 1))
+            cv2.rectangle(frame, (x0, y0), (x1, y1), (0, 0, 255), 2)  # fallback to zone box
 
         snap_path = os.path.join(out_dir, f"{base}_{stamp}_event{current_best['event_id']}_snapshot.jpg")
         ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
@@ -962,7 +972,10 @@ def analyze_video(
                 "frame_index": current_best["frame_index"],
                 "timecode": current_best["timecode"],
                 "zone_id": current_best["zone_id"],
-                "x0": current_best["x0"], "y0": current_best["y0"], "x1": current_best["x1"], "y1": current_best["y1"],
+                "x0": current_best["x0"],  # Store normalized
+                "y0": current_best["y0"],
+                "x1": current_best["x1"],
+                "y1": current_best["y1"],
                 "risk_score": float(current_best["risk_score"]),
                 "path": snap_path
             })
@@ -1014,7 +1027,7 @@ def analyze_video(
                     if not flow_baseline.ready:
                         flow_baseline.update(flow_mean)
                     fast_gate = flow_baseline.mean + FLOW_MEAN_Z * flow_baseline.std
-                    flow_fast_frac = float(np.mean(mag > fast_gate)) if flow_baseline.ready else 0.0
+                    flow_fast_frac = float(np.mean(mag > fast_gate)) if flow_base_line.ready else 0.0
 
                     cond_speed   = (flow_baseline.ready and flow_fast_frac >= FLOW_FAST_FRAC_MIN) \
                                    or (flow_p95 >= FLOW_P95_MIN) \
@@ -1081,8 +1094,11 @@ def analyze_video(
 
                 cell_records = []
                 for ((x0,y0,x1,y1), cid) in grid_boxes:
+                    # Store normalized grid coordinates
                     cell_records.append({
-                        "cell_id": cid, "x0": x0, "y0": y0, "x1": x1, "y1": y1,
+                        "cell_id": cid,
+                        "x0": float(x0)/W, "y0": float(y0)/H,
+                        "x1": float(x1)/W, "y1": float(y1)/H,
                         "cand": 0, "sum_dy_norm": 0.0, "max_dy_norm": 0.0,
                         "torso_flow_accum": 0.0, "cnn_cell": 0.0, "heads": 0
                     })
@@ -1112,7 +1128,7 @@ def analyze_video(
                 candidates = []
                 for tinfo in tracks:
                     (xh, yh) = tinfo["pos"]; rhead = max(2.0, tinfo.get("r", 6.0))
-                    if len(tinfo["hist"]) < (window_frames + 1):
+                    if len(tinfo folytatás["hist"]) < (window_frames + 1):
                         tinfo["down_streak"] = 0
                         continue
 
@@ -1127,19 +1143,11 @@ def analyze_video(
                     yh0 = int(max(0, yh - 1.0*rhead)); yh1 = int(min(H, yh + 0.5*rhead))
                     yt0 = int(max(0, yh + 0.5*rhead)); yt1 = int(min(H, yh + 3.0*rhead))
                     torso_flow = float(down_mag[yt0:yt1, x0r:x1r].mean()) if yt1>yt0 else 0.0
-                    head_flow  = float(down_mag[yh0:yh1, x0r:x1r].mean()) if yh1>yh0 else 0.0
+                    head_flow  = float(down_mag[yh0:yh1, x0r:x1r].mean()) if yh1>clado
                     torso_ratio = (torso_flow + 1e-6) / (head_flow + 1e-6)
                     torso_scene = (torso_flow + 1e-6) / scene_mean_flow
 
-                    # compute speed
-                    speed = 0.0
-                    if len(tinfo["hist"]) > 1:
-                        prev_x, prev_y, _ = tinfo["hist"][-2]
-                        dx = xh - prev_x
-                        dy = yh - prev_y
-                        speed = np.sqrt(dx**2 + dy**2)
-
-                    # STRONGER joint condition: head drop + relative drop + torso motion dominance
+                    # STRONGER joint condition: head drop + relative drop + torso motion
                     cond_drop  = (dy_norm_abs >= HEAD_DOWN_MIN_DY_FRAC) or (dy >= HEAD_DOWN_MIN_DY_RAD * rhead)
                     cond_rel   = (rel_drop_rad >= NEIGH_REL_MIN_RAD)
                     cond_torso = (torso_ratio >= TORSO_RATIO_MIN) and (torso_scene >= TORSO_SCENE_MIN)
@@ -1158,10 +1166,17 @@ def analyze_video(
                         rec["sum_dy_norm"] += dy_norm_abs
                         rec["max_dy_norm"] = max(rec["max_dy_norm"], dy_norm_abs)
                         rec["torso_flow_accum"] += (torso_flow + 1e-6) / (scene_mean_flow + 1e-6)
-                        candidates.append({"x0": int(x0r), "y0": int(yh0), "x1": int(x1r), "y1": int(yt1)})
+                        # Store normalized candidate coordinates
+                        candidates.append({
+                            "x0": float(x0r)/W, "y0": float(yh0)/H,
+                            "x1": float(x1r)/W, "y1": float(yt1)/H
+                        })
 
                     if speed > fast_gate and stampede_label == 1:
-                        candidates.append({"x0": int(x0r), "y0": int(yh0), "x1": int(x1r), "y1": int(yt1)})
+                        candidates.append({
+                            "x0": float(x0r)/W, "y0": float(yh0)/H,
+                            "x1": float(x1r)/W, "y1": float(yt1)/H
+                        })
 
                 # fill cnn_cell & compute risk
                 for rec in cell_records:
@@ -1196,7 +1211,7 @@ def analyze_video(
                         "frame_index": f,
                         "timecode": sec_to_tc(f / fps),
                         "zone_id": best["cell_id"],
-                        "x0": bx0, "y0": by0, "x1": bx1, "y1": by1,
+                        "x0": bx0, "y0": by0, "x1": bx1, "y1": by1,  # Normalized coordinates
                         "risk_score": best_risk,
                         "candidates": candidates.copy()
                     }
