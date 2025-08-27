@@ -1,4 +1,3 @@
-
 # app.py — Crowd Guardian (Video only)
 # Premium UI: custom HTML/CSS, decorated sidebar, status banner (no timeline bar),
 # Altair charts, JS confetti, animated particles background, and
@@ -1323,7 +1322,3 @@ if go:
         st.session_state["detection_mode_label"] = detection_mode
         st.session_state["render_nonce"] = str(int(time.time() * 1e6))
         render_results(df_frames, df_events, labeled_path, key_seed=st.session_state["render_nonce"])
-
-
-
-
