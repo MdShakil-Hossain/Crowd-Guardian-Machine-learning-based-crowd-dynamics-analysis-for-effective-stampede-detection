@@ -1,4 +1,3 @@
-
 # app.py — Crowd Guardian (Video only)
 # Premium UI: custom HTML/CSS, decorated sidebar, status banner (no timeline bar),
 # Altair charts, JS confetti, animated particles background, and
@@ -509,20 +508,13 @@ def upscale_cam(cam_small, W, H):
     return cv2.resize(cam_small, (W, H), interpolation=cv2.INTER_CUBIC)
 
 def make_grid(W, H, rows=6, cols=6):
-    aspect = W / H
-    if aspect < 1:  # Portrait, adjust columns
-        cols = int(rows * aspect)
-        cols = max(2, cols)  # Ensure minimum grid resolution
-    elif aspect > 1.5:  # Wide landscape, adjust rows
-        rows = int(cols / aspect)
-        rows = max(2, rows)  # Ensure minimum grid resolution
-    cell_w, cell_h = W // max(1, cols), H // max(1, rows)
+    cell_w, cell_h = W // cols, H // rows
     boxes = []
     for r in range(rows):
         for c in range(cols):
-            x0, y0 = c * cell_w, r * cell_h
-            x1 = W if c == cols - 1 else (c + 1) * cell_w
-            y1 = H if r == rows - 1 else (r + 1) * cell_h
+            x0, y0 = c*cell_w, r*cell_h
+            x1 = W if c == cols-1 else (c+1)*cell_w
+            y1 = H if r == rows-1 else (r+1)*cell_h
             boxes.append(((x0, y0, x1, y1), f"r{r}c{c}"))
     return boxes, cell_w, cell_h
 
@@ -886,7 +878,7 @@ def analyze_video(
     event_id = 0
 
     # XAI state
-    grid_boxes, cell_w, cell_h = make_grid(W, H)
+    grid_boxes, cell_w, cell_h = make_grid(W, H, rows=GRID_ROWS, cols=GRID_COLS)
     prev_gray_for_flow = None
     events_z_rows = []
     snapshots = []
@@ -924,16 +916,8 @@ def analyze_video(
         if frame is None:
             current_best = None; return
 
-        candidates = current_best.get("candidates", [])
-        if candidates:
-            min_x = min(c['x0'] for c in candidates)
-            min_y = min(c['y0'] for c in candidates)
-            max_x = max(c['x1'] for c in candidates)
-            max_y = max(c['y1'] for c in candidates)
-            cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), (0, 0, 255), 2)
-        else:
-            x0,y0,x1,y1 = current_best["x0"], current_best["y0"], current_best["x1"], current_best["y1"]
-            cv2.rectangle(frame, (x0, y0), (x1, y1), (0, 0, 255), 2)  # fallback to zone box
+        x0, y0, x1, y1 = current_best["x0"], current_best["y0"], current_best["x1"], current_best["y1"]
+        cv2.rectangle(frame, (x0, y0), (x1, y1), (0, 0, 255), 2)
 
         snap_path = os.path.join(out_dir, f"{base}_{stamp}_event{current_best['event_id']}_snapshot.jpg")
         ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
@@ -1061,7 +1045,7 @@ def analyze_video(
 
                 scene_mean_flow = float(down_mag.mean()) + 1e-6
 
-                grid_boxes, cell_w, cell_h = make_grid(W, H)
+                grid_boxes, cell_w, cell_h = make_grid(W, H, rows=GRID_ROWS, cols=GRID_COLS)
 
                 cell_records = []
                 for ((x0,y0,x1,y1), cid) in grid_boxes:
