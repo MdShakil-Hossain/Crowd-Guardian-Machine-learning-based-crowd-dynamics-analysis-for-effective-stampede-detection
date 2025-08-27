@@ -799,6 +799,48 @@ def update_tracks(tracks, detections, radii, max_dist, window_cap):
     return survivors
 
 # =============================================================================
+# Add boxes to video
+# =============================================================================
+def add_boxes_to_video(input_path, output_path, df_events, snapshots):
+    cap = cv2.VideoCapture(input_path)
+    if not cap.isOpened():
+        return input_path  # fallback
+
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_path, fourcc, fps, (W, H))
+
+    # Map event_id to box
+    event_boxes = {s['event_id']: (int(s['x0']), int(s['y0']), int(s['x1']), int(s['y1'])) for s in snapshots}
+
+    # Map frame to event_id
+    frame_to_event = {}
+    for _, row in df_events.iterrows():
+        eid = int(row['event_id'])
+        start_f = int(row['start_frame'])
+        end_f = int(row['end_frame'])
+        for fr in range(start_f, end_f + 1):
+            frame_to_event[fr] = eid
+
+    f = 0
+    while True:
+        ok, frame = cap.read()
+        if not ok: break
+        if f in frame_to_event:
+            eid = frame_to_event[f]
+            if eid in event_boxes:
+                x0, y0, x1, y1 = event_boxes[eid]
+                cv2.rectangle(frame, (x0, y0), (x1, y1), (0, 0, 255), 2)
+        out.write(frame)
+        f += 1
+
+    cap.release()
+    out.release()
+    return output_path
+
+# =============================================================================
 # Core analysis
 # =============================================================================
 def analyze_video(
@@ -843,7 +885,7 @@ def analyze_video(
         "stampede_label",
         "final_label"
     )]
-    events_rows = [("start_frame","end_frame","start_time_sec","end_time_sec","start_tc","end_tc","duration_sec")]
+    events_rows = [("event_id","start_frame","end_frame","start_time_sec","end_time_sec","start_tc","end_tc","duration_sec")]
 
     out_dir = os.path.join(os.getcwd(), "outputs")
     os.makedirs(out_dir, exist_ok=True)
@@ -865,14 +907,10 @@ def analyze_video(
     snapshots = []
     current_best = None
 
-    # Track heads over time for head-down
+    # NEW: track heads over time for head-down
     tracks = []
     window_frames = max(1, int(round(HEAD_DOWN_WINDOW_SEC * (fps/step))))
     streak_frames = max(2, int(round(HEAD_DOWN_MIN_STREAK_SEC * (fps/step))))
-
-    # Track bounding box for events, adjusted for camera motion
-    current_bbox = None  # (x0, y0, x1, y1)
-    cumulative_dx, cumulative_dy = 0.0, 0.0  # Track cumulative camera motion
 
     # --------- Custom progress (single gradient bar) ----------
     prog_box = st.empty()
@@ -895,35 +933,45 @@ def analyze_video(
 
     # helper to save the best snapshot per event — WITH refined bounding box
     def save_current_best():
-        nonlocal current_best, snapshots, cumulative_dx, cumulative_dy
+        nonlocal current_best, snapshots
         if not current_best: return
         frame = current_best.pop("frame", None)
         if frame is None:
             current_best = None; return
         
-        # Use current_best coordinates directly for bounding box
-        min_x, min_y, max_x, max_y = current_best["x0"], current_best["y0"], current_best["x1"], current_best["y1"]
-        # Adjust for cumulative camera motion
-        min_x, max_x = int(min_x + cumulative_dx), int(max_x + cumulative_dx)
-        min_y, max_y = int(min_y + cumulative_dy), int(max_y + cumulative_dy)
-        # Clamp to frame boundaries
-        min_x, max_x = max(0, min_x), min(W, max_x)
-        min_y, max_y = max(0, min_y), min(H, max_y)
-        # Ensure box is not too large
-        box_area = (max_x - min_x) * (max_y - min_y)
-        frame_area = W * H
-        if box_area > 0.5 * frame_area:  # Prevent overly large boxes
-            cx = (min_x + max_x) // 2
-            cy = (min_y + max_y) // 2
-            size = int(min(W, H) * 0.1)  # Fixed size around centroid
-            min_x, max_x = cx - size, cx + size
-            min_y, max_y = cy - size, cy + size
-            # Re-clamp after resizing
-            min_x, max_x = max(0, min_x), min(W, max_x)
-            min_y, max_y = max(0, min_y), min(H, max_y)
-        # Draw bounding box
-        if max_x > min_x and max_y > min_y:
+        candidates = current_best.get("candidates", [])
+        if candidates:
+            min_x = min(c['x0'] for c in candidates)
+            min_y = min(c['y0'] for c in candidates)
+            max_x = max(c['x1'] for c in candidates)
+            max_y = max(c['y1'] for c in candidates)
+            # Ensure box is not too large
+            box_area = (max_x - min_x) * (max_y - min_y)
+            frame_area = W * H
+            if box_area > 0.5 * frame_area:  # Prevent overly large boxes
+                cx = (min_x + max_x) // 2
+                cy = (min_y + max_y) // 2
+                size = int(min(W, H) * 0.1)  # Fixed size around centroid
+                min_x, max_x = cx - size, cx + size
+                min_y, max_y = cy - size, cy + size
             cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), (0, 0, 255), 2)
+        else:
+            # Fallback: Use centroid of detected heads
+            heads = [(t["pos"][0], t["pos"][1]) for t in tracks]
+            if heads:
+                cx = int(sum(x for x, _ in heads) / len(heads))
+                cy = int(sum(y for _, y in heads) / len(heads))
+                size = int(min(W, H) * 0.1)
+                min_x, max_x = cx - size, cx + size
+                min_y, max_y = cy - size, cy + size
+                cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), (0, 0, 255), 2)
+            else:
+                # Last resort: Small central box
+                size = int(min(W, H) * 0.05)
+                cx, cy = W // 2, H // 2
+                min_x, max_x = cx - size, cx + size
+                min_y, max_y = cy - size, cy + size
+                cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), (0, 0, 255), 2)
         
         snap_path = os.path.join(out_dir, f"{base}_{stamp}_event{current_best['event_id']}_snapshot.jpg")
         ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
@@ -955,7 +1003,6 @@ def analyze_video(
             flow_mean = flow_p95 = flow_coh = flow_div_out = flow_fast_frac = 0.0
             stampede_label = 0
             mag = np.zeros((H, W), dtype=np.float32)
-            gx, gy = 0.0, 0.0  # Camera motion
             if prev_gray_for_metrics is not None and prev_gray_for_metrics.shape == gray.shape:
                 try:
                     flow_full = cv2.calcOpticalFlowFarneback(
@@ -999,10 +1046,6 @@ def analyze_video(
                 except cv2.error:
                     pass
             prev_gray_for_metrics = gray.copy()
-
-            # Update cumulative camera motion (flip sign to compensate correctly)
-            cumulative_dx += -gx  # Flip sign for correct compensation
-            cumulative_dy += -gy  # Flip sign for correct compensation
 
             # --- Heads detection & tracking for crush/surge (collapse) ---
             head_pts, head_radii = detect_heads_gray(gray, detector)
@@ -1229,7 +1272,7 @@ def analyze_video(
                 dur_frames = (f - start_f) // step
                 if dur_frames >= min_event_frames:
                     end_t = (f-1) / fps
-                    events_rows.append((start_f, f-1, start_t, end_t,
+                    events_rows.append((event_id, start_f, f-1, start_t, end_t,
                                         sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
                     if current_best: save_current_best()
                 in_event, start_f, start_t = False, None, None
@@ -1273,18 +1316,12 @@ def analyze_video(
 
     if in_event and start_f is not None:
         end_t = (f-1) / fps
-        events_rows.append((start_f, f-1, start_t, end_t,
+        events_rows.append((event_id, start_f, f-1, start_t, end_t,
                             sec_to_tc(start_t), sec_to_tc(end_t), end_t-start_t))
         if current_best: save_current_best()
 
     cap.release()
     out_video.release()
-
-    # Transcode to h264
-    h264_path = labeled_path.replace(".mp4", "_h264.mp4")
-    labeled_path, ok, err = transcode_to_h264(labeled_path, h264_path, fps)
-    if not ok:
-        st.warning(f"Transcoding failed: {err}")
 
     render_prog(1.0, total_steps, total_steps)
     df_frames = pd.DataFrame(frames_rows[1:], columns=frames_rows[0])
@@ -1309,9 +1346,21 @@ if go:
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded.name)[1])
         tmp.write(uploaded.read()); tmp.close()
         with st.spinner("Analyzing video…"):
-            df_frames, df_events, labeled_path = analyze_video(
+            df_frames, df_events, prelim_labeled_path = analyze_video(
                 tmp.name, model, detection_mode=detection_mode
             )
+        out_dir = os.path.join(os.getcwd(), "outputs")
+        base = os.path.splitext(os.path.basename(tmp.name))[0]
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        boxed_path = os.path.join(out_dir, f"{base}_{stamp}_labeled_with_box.mp4")
+        boxed_path = add_boxes_to_video(prelim_labeled_path, boxed_path, df_events, st.session_state["video_xai"]["snapshots"])
+        temp_cap = cv2.VideoCapture(boxed_path)
+        fps = temp_cap.get(cv2.CAP_PROP_FPS) or 30.0
+        temp_cap.release()
+        h264_path = boxed_path.replace(".mp4", "_h264.mp4")
+        labeled_path, ok, err = transcode_to_h264(boxed_path, h264_path, fps)
+        if not ok:
+            st.warning(f"Transcoding failed: {err}")
         st.session_state["video_results"] = {
             "df_frames": df_frames,
             "df_events": df_events,
