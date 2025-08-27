@@ -1,8 +1,3 @@
-# app.py — Crowd Guardian (Video only)
-# Premium UI: custom HTML/CSS, decorated sidebar, status banner (no timeline bar),
-# Altair charts, JS confetti, animated particles background, and
-# **session_state persistence** so downloads don't "refresh away" your results.
-
 import os
 import cv2
 import time
@@ -186,7 +181,7 @@ st.markdown(
       .sb-brand { font-weight: 700; font-size: 1.10rem; letter-spacing:.2px; margin: 12px 14px 10px 14px; }
 
       .sb-card { border:1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.04);
-                 border-radius: 14px; padding: 12px 14px; margin: 12 hesabungan; }
+                 border-radius: 14px; padding: 12px 14px; margin: 12px; }
       .sb-small {font-size:12px; opacity:.85;}
       .sb-card ul, .sb-card ol {padding-left: 1.05rem; margin: .25rem 0 0 0;}
       .sb-card li {margin-bottom: 6px;}
@@ -512,12 +507,12 @@ def make_grid(W, H, rows=6, cols=6):
     boxes = []
     for r in range(rows):
         for c in range(cols):
-            x0, y0 = c*cell_w, r*cell_h
-            x1 = W if c == cols-1 else (c+1)*cell_w
-            y1 = H if r == rows-1 else (r+1)*cell_h
-            # Normalizing grid coordinates for storage
+            x0, y0 = c * cell_w, r * cell_h
+            x1 = W if c == cols - 1 else (c + 1) * cell_w
+            y1 = H if r == rows - 1 else (r + 1) * cell_h
+            # Store normalized coordinates for consistency
             boxes.append((
-                (float(x0)/W, float(y0)/H, float(x1)/W, float(y1)/H),  # Store normalized
+                (float(x0) / W, float(y0) / H, float(x1) / W, float(y1) / H),  # Normalized
                 f"r{r}c{c}"
             ))
     return boxes, cell_w, cell_h
@@ -725,7 +720,7 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
         st.download_button("⬇️ events_zones.csv",
                            df_events_zones.to_csv(index=False).encode("utf-8"),
                            file_name="events_zones.csv", mime="text/csv",
-                           использованием_container_width=True, key=f"dl_events_z_{uid}")
+                           use_container_width=True, key=f"dl_events_z_{uid}")
 
     snapshots = extra.get("snapshots", [])
     if snapshots:
@@ -904,7 +899,7 @@ def analyze_video(
             f'''
             <div class="cg-prog">
               <div class="cg-prog-label">Processing frames… <b>{pct}%</b> ({processed}/{total})</div>
-              <div class="cg-prog-track"><div class="cg-prog-fill" style="width:{pct}%"></div></div>
+            <div class="cg-prog-track"><div class="cg-prog-fill" style="width:{pct}%"></div></div>
             </div>
             ''',
             unsafe_allow_html=True
@@ -1026,7 +1021,7 @@ def analyze_video(
                     if not flow_baseline.ready:
                         flow_baseline.update(flow_mean)
                     fast_gate = flow_baseline.mean + FLOW_MEAN_Z * flow_baseline.std
-                    flow_fast_frac = float(np.mean(mag > fast_gate)) if flow_base_line.ready else 0.0
+                    flow_fast_frac = float(np.mean(mag > fast_gate)) if flow_baseline.ready else 0.0
 
                     cond_speed   = (flow_baseline.ready and flow_fast_frac >= FLOW_FAST_FRAC_MIN) \
                                    or (flow_p95 >= FLOW_P95_MIN) \
@@ -1127,7 +1122,7 @@ def analyze_video(
                 candidates = []
                 for tinfo in tracks:
                     (xh, yh) = tinfo["pos"]; rhead = max(2.0, tinfo.get("r", 6.0))
-                    if len(tinfo folytatás["hist"]) < (window_frames + 1):
+                    if len(tinfo["hist"]) < (window_frames + 1):
                         tinfo["down_streak"] = 0
                         continue
 
@@ -1142,7 +1137,7 @@ def analyze_video(
                     yh0 = int(max(0, yh - 1.0*rhead)); yh1 = int(min(H, yh + 0.5*rhead))
                     yt0 = int(max(0, yh + 0.5*rhead)); yt1 = int(min(H, yh + 3.0*rhead))
                     torso_flow = float(down_mag[yt0:yt1, x0r:x1r].mean()) if yt1>yt0 else 0.0
-                    head_flow  = float(down_mag[yh0:yh1, x0r:x1r].mean()) if yh1>clado
+                    head_flow  = float(down_mag[yh0:yh1, x0r:x1r].mean()) if yh1>yh0 else 0.0
                     torso_ratio = (torso_flow + 1e-6) / (head_flow + 1e-6)
                     torso_scene = (torso_flow + 1e-6) / scene_mean_flow
 
@@ -1166,12 +1161,6 @@ def analyze_video(
                         rec["max_dy_norm"] = max(rec["max_dy_norm"], dy_norm_abs)
                         rec["torso_flow_accum"] += (torso_flow + 1e-6) / (scene_mean_flow + 1e-6)
                         # Store normalized candidate coordinates
-                        candidates.append({
-                            "x0": float(x0r)/W, "y0": float(yh0)/H,
-                            "x1": float(x1r)/W, "y1": float(yt1)/H
-                        })
-
-                    if speed > fast_gate and stampede_label == 1:
                         candidates.append({
                             "x0": float(x0r)/W, "y0": float(yh0)/H,
                             "x1": float(x1r)/W, "y1": float(yt1)/H
@@ -1355,6 +1344,3 @@ if go:
         st.session_state["detection_mode_label"] = detection_mode
         st.session_state["render_nonce"] = str(int(time.time() * 1e6))
         render_results(df_frames, df_events, labeled_path, key_seed=st.session_state["render_nonce"])
-
-
-
