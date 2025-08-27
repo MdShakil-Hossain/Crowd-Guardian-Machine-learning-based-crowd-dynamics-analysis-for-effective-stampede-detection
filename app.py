@@ -1351,14 +1351,14 @@ def analyze_video(
         # AI Monitoring overlay
         cv2.putText(frame_bgr, "AI Monitoring", (W - 200, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 1)
 
-        # Draw scattered dots based on motion
-        if flow_baseline.ready:
-            fast_gate = flow_baseline.mean + FLOW_MEAN_Z * flow_baseline.std
-            rows, cols = np.where(mag > fast_gate)
-            if len(rows) > 0:
-                num_dots = int(50 + 450 * flow_fast_frac)
-                num_dots = min(num_dots, len(rows))
-                indices = np.random.choice(len(rows), num_dots, replace=False)
-                for i in indices:
-                    y_dot, x_dot = rows[i], cols[i]
-                    cv2.circle(frame_bgr, (x_dot, y_dot), 2,
+      # Draw scattered dots based on motion
+if flow_baseline.ready:
+    fast_gate = flow_baseline.mean + FLOW_MEAN_Z * flow_baseline.std
+    rows, cols = np.where(mag > fast_gate)
+    if len(rows) > 0:
+        num_dots = int(50 + 450 * flow_fast_frac)
+        num_dots = min(num_dots, len(rows))
+        indices = np.random.choice(len(rows), num_dots, replace=False)
+        for i in indices:
+            y_dot, x_dot = rows[i], cols[i]
+            cv2.circle(frame_bgr, (x_dot, y_dot), 2, (0, 0, 255), -1)  # Red filled circle
