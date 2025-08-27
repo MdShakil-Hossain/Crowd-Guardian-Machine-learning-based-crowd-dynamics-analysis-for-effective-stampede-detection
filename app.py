@@ -908,7 +908,7 @@ def analyze_video(
 
     render_prog(0.0, 0, total_steps)
 
-    # helper to save the best snapshot per event — NO drawing overlays
+    # helper to save the best snapshot per event — WITH bounding box
     def save_current_best():
         nonlocal current_best, snapshots
         if not current_best: return
@@ -917,6 +917,8 @@ def analyze_video(
             current_best = None; return
 
         x0,y0,x1,y1 = current_best["x0"], current_best["y0"], current_best["x1"], current_best["y1"]
+        # Draw red bounding box on snapshot
+        cv2.rectangle(frame, (x0, y0), (x1, y1), (0, 0, 255), 2)  # Red box, thickness 2
 
         snap_path = os.path.join(out_dir, f"{base}_{stamp}_event{current_best['event_id']}_snapshot.jpg")
         ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
@@ -1234,6 +1236,11 @@ def analyze_video(
                     y_dot, x_dot = rows[i], cols[i]
                     cv2.circle(frame_bgr, (x_dot, y_dot), 2, (0, 255, 255), -1)  # yellow dots
 
+        # Draw red bounding box for stampede zone if detected
+        if last_final_label == 1 and current_best:
+            x0, y0, x1, y1 = current_best["x0"], current_best["y0"], current_best["x1"], current_best["y1"]
+            cv2.rectangle(frame_bgr, (x0, y0), (x1, y1), (0, 0, 255), 2)  # Red box, thickness 2
+
         # Draw links if enabled
         if draw_links:
             for t in tracks:
@@ -1294,5 +1301,3 @@ if go:
         st.session_state["detection_mode_label"] = detection_mode
         st.session_state["render_nonce"] = str(int(time.time() * 1e6))
         render_results(df_frames, df_events, labeled_path, key_seed=st.session_state["render_nonce"])
-
-
