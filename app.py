@@ -1,4 +1,4 @@
-```python
+
 # app.py — Crowd Guardian (Video only)
 # Premium UI: custom HTML/CSS, decorated sidebar, status banner (no timeline bar),
 # Altair charts, JS confetti, animated particles background, and
@@ -1325,3 +1325,4 @@ if go:
         render_results(df_frames, df_events, labeled_path, key_seed=st.session_state["render_nonce"])
 
 ```
+
