@@ -1388,4 +1388,10 @@ if go:
         out_dir = os.path.join(os.getcwd(), "outputs")
         base = os.path.splitext(os.path.basename(tmp.name))[0]
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        boxed_path =
+        boxed_path = add_boxes_to_video(
+    prelim_labeled_path,
+    os.path.join(out_dir, f"{base}_{stamp}_boxed.mp4"),
+    df_events,
+    st.session_state["video_xai"]["snapshots"]
+)
+
