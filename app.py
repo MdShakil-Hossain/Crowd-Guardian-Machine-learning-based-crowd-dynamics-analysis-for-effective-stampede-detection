@@ -1175,7 +1175,7 @@ def analyze_video(
                         "zone_id": best["cell_id"],
                         "x0": bx0, "y0": by0, "x1": bx1, "y1": by1,
                         "risk_score": best_risk,
-                        "candidates": candidates.copy() if candidates else []
+                        "candidates": candidates.copy()
                     }
 
                 for rc in cell_records:
