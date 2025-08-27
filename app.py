@@ -11,7 +11,6 @@ import streamlit as st
 import altair as alt
 from scipy.optimize import linear_sum_assignment
 from collections import deque
-
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import urllib.request, hashlib
@@ -659,8 +658,7 @@ def render_results(df_frames, df_events, labeled_path, key_seed=None):
             line_fp95  = base.mark_line(strokeDash=[4,4]).encode(
                 x='frame_index:Q', y=alt.Y('flow_p95:Q', title=None)
             )
-            st.altair_chart((line_fmean + line_fp95).interact
-ive(), use_container_width=True)
+            st.altair_chart((line_fmean + line_fp95).interactive(), use_container_width=True)
         with right2:
             st.subheader("Flow Coherence")
             line_coh = base.mark_line().encode(
@@ -883,7 +881,7 @@ def analyze_video(
             f'''
             <div class="cg-prog">
               <div class="cg-prog-label">Processing frames… <b>{pct}%</b> ({processed}/{total})</div>
-              <div class="cg-prog-track"><div class="cg-prog-fill" style="width:{pct}%"></div></div>
+            <div class="cg-prog-track"><div class="cg-prog-fill" style="width:{pct}%"></div></div>
             </div>
             ''',
             unsafe_allow_html=True
