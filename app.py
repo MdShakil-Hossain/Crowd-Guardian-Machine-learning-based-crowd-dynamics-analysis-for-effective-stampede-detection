@@ -916,9 +916,13 @@ def analyze_video(
         if frame is None:
             current_best = None; return
 
-        x0,y0,x1,y1 = current_best["x0"], current_best["y0"], current_best["x1"], current_best["y1"]
-        # Draw red bounding box on snapshot
-        cv2.rectangle(frame, (x0, y0), (x1, y1), (0, 0, 255), 2)  # Red box, thickness 2
+        candidates = current_best.get("candidates", [])
+        if candidates:
+            for cand in candidates:
+                cv2.rectangle(frame, (cand["x0"], cand["y0"]), (cand["x1"], cand["y1"]), (0, 0, 255), 2)
+        else:
+            x0,y0,x1,y1 = current_best["x0"], current_best["y0"], current_best["x1"], current_best["y1"]
+            cv2.rectangle(frame, (x0, y0), (x1, y1), (0, 0, 255), 2)  # fallback to zone box
 
         snap_path = os.path.join(out_dir, f"{base}_{stamp}_event{current_best['event_id']}_snapshot.jpg")
         ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
@@ -931,7 +935,7 @@ def analyze_video(
                 "frame_index": current_best["frame_index"],
                 "timecode": current_best["timecode"],
                 "zone_id": current_best["zone_id"],
-                "x0": x0, "y0": y0, "x1": x1, "y1": y1,
+                "x0": current_best["x0"], "y0": current_best["y0"], "x1": current_best["x1"], "y1": current_best["y1"],
                 "risk_score": float(current_best["risk_score"]),
                 "path": snap_path
             })
@@ -1078,6 +1082,7 @@ def analyze_video(
                     ci = cell_index_for(xh, yh)
                     cell_records[ci]["heads"] += 1
 
+                candidates = []
                 for tinfo in tracks:
                     (xh, yh) = tinfo["pos"]; rhead = max(2.0, tinfo.get("r", 6.0))
                     if len(tinfo["hist"]) < (window_frames + 1):
@@ -1099,6 +1104,14 @@ def analyze_video(
                     torso_ratio = (torso_flow + 1e-6) / (head_flow + 1e-6)
                     torso_scene = (torso_flow + 1e-6) / scene_mean_flow
 
+                    # compute speed
+                    speed = 0.0
+                    if len(tinfo["hist"]) > 1:
+                        prev_x, prev_y, _ = tinfo["hist"][-2]
+                        dx = xh - prev_x
+                        dy = yh - prev_y
+                        speed = np.sqrt(dx**2 + dy**2)
+
                     # STRONGER joint condition: head drop + relative drop + torso motion dominance
                     cond_drop  = (dy_norm_abs >= HEAD_DOWN_MIN_DY_FRAC) or (dy >= HEAD_DOWN_MIN_DY_RAD * rhead)
                     cond_rel   = (rel_drop_rad >= NEIGH_REL_MIN_RAD)
@@ -1118,6 +1131,10 @@ def analyze_video(
                         rec["sum_dy_norm"] += dy_norm_abs
                         rec["max_dy_norm"] = max(rec["max_dy_norm"], dy_norm_abs)
                         rec["torso_flow_accum"] += (torso_flow + 1e-6) / (scene_mean_flow + 1e-6)
+                        candidates.append({"x0": int(x0r), "y0": int(yh0), "x1": int(x1r), "y1": int(yt1), "type": "crush"})
+
+                    if speed > fast_gate and stampede_label == 1:
+                        candidates.append({"x0": int(x0r), "y0": int(yh0), "x1": int(x1r), "y1": int(yt1), "type": "stampede"})
 
                 # fill cnn_cell & compute risk
                 for rec in cell_records:
@@ -1153,7 +1170,8 @@ def analyze_video(
                         "timecode": sec_to_tc(f / fps),
                         "zone_id": best["cell_id"],
                         "x0": bx0, "y0": by0, "x1": bx1, "y1": by1,
-                        "risk_score": best_risk
+                        "risk_score": best_risk,
+                        "candidates": candidates.copy()
                     }
 
                 for rc in cell_records:
