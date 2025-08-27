@@ -1,3 +1,4 @@
+```python
 # app.py — Crowd Guardian (Video only)
 # Premium UI: custom HTML/CSS, decorated sidebar, status banner (no timeline bar),
 # Altair charts, JS confetti, animated particles background, and
@@ -889,6 +890,9 @@ def analyze_video(
     window_frames = max(1, int(round(HEAD_DOWN_WINDOW_SEC * (fps/step))))
     streak_frames = max(2, int(round(HEAD_DOWN_MIN_STREAK_SEC * (fps/step))))
 
+    # For video bounding box
+    last_min_x = last_min_y = last_max_x = last_max_y = None
+
     # --------- Custom progress (single gradient bar) ----------
     prog_box = st.empty()
     processed = 0
@@ -1107,14 +1111,6 @@ def analyze_video(
                     torso_ratio = (torso_flow + 1e-6) / (head_flow + 1e-6)
                     torso_scene = (torso_flow + 1e-6) / scene_mean_flow
 
-                    # compute speed
-                    speed = 0.0
-                    if len(tinfo["hist"]) > 1:
-                        prev_x, prev_y, _ = tinfo["hist"][-2]
-                        dx = xh - prev_x
-                        dy = yh - prev_y
-                        speed = np.sqrt(dx**2 + dy**2)
-
                     # STRONGER joint condition: head drop + relative drop + torso motion dominance
                     cond_drop  = (dy_norm_abs >= HEAD_DOWN_MIN_DY_FRAC) or (dy >= HEAD_DOWN_MIN_DY_RAD * rhead)
                     cond_rel   = (rel_drop_rad >= NEIGH_REL_MIN_RAD)
@@ -1136,8 +1132,14 @@ def analyze_video(
                         rec["torso_flow_accum"] += (torso_flow + 1e-6) / (scene_mean_flow + 1e-6)
                         candidates.append({"x0": int(x0r), "y0": int(yh0), "x1": int(x1r), "y1": int(yt1)})
 
-                    if speed > fast_gate and stampede_label == 1:
-                        candidates.append({"x0": int(x0r), "y0": int(yh0), "x1": int(x1r), "y1": int(yt1)})
+                # Update last bounding box for video
+                if any_head_and_torso_down and candidates:
+                    last_min_x = min(c['x0'] for c in candidates)
+                    last_min_y = min(c['y0'] for c in candidates)
+                    last_max_x = max(c['x1'] for c in candidates)
+                    last_max_y = max(c['y1'] for c in candidates)
+                else:
+                    last_min_x = last_min_y = last_max_x = last_max_y = None
 
                 # fill cnn_cell & compute risk
                 for rec in cell_records:
@@ -1174,7 +1176,7 @@ def analyze_video(
                         "zone_id": best["cell_id"],
                         "x0": bx0, "y0": by0, "x1": bx1, "y1": by1,
                         "risk_score": best_risk,
-                        "candidates": candidates.copy()
+                        "candidates": candidates.copy() if candidates else []
                     }
 
                 for rc in cell_records:
@@ -1257,6 +1259,10 @@ def analyze_video(
                     y_dot, x_dot = rows[i], cols[i]
                     cv2.circle(frame_bgr, (x_dot, y_dot), 2, (0, 255, 255), -1)  # yellow dots
 
+        # Draw bounding box on video if stampede and falling detected
+        if last_final_label == 1 and last_min_x is not None:
+            cv2.rectangle(frame_bgr, (last_min_x, last_min_y), (last_max_x, last_max_y), (0, 0, 255), 2)
+
         # Draw links if enabled
         if draw_links:
             for t in tracks:
@@ -1317,3 +1323,5 @@ if go:
         st.session_state["detection_mode_label"] = detection_mode
         st.session_state["render_nonce"] = str(int(time.time() * 1e6))
         render_results(df_frames, df_events, labeled_path, key_seed=st.session_state["render_nonce"])
+
+```
