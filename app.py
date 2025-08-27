@@ -456,52 +456,84 @@ def transcode_to_h264(src_path: str, dst_path: str, fps: float):
 # =============== XAI: Grad-CAM + zone grid helpers ===========================
 def gradcam_heatmap(model, x_100x100x1, conv_layer_name=None):
     import tensorflow as tf
+    if model is None:
+        return None
 
     def _select_score_vector(preds_any):
-        t = preds_any
-        if isinstance(t, dict): t = t[sorted(t.keys())[0]]
-        if isinstance(t, (list, tuple)): t = t[0]
-        t = tf.convert_to_tensor(t)
-        r = t.shape.rank
-        if r is None: return tf.reshape(t, (tf.shape(t)[0], -1))[:, -1]
-        if r == 1:  return t
-        if r == 2:
-            c = t.shape[-1]
-            return tf.squeeze(t, axis=-1) if c == 1 else t[:, -1]
-        return tf.reshape(t, (tf.shape(t)[0], -1))[:, -1]
+        try:
+            t = preds_any
+            if isinstance(t, dict):
+                t = t.get(sorted(t.keys())[0], t)
+            if isinstance(t, (list, tuple)):
+                t = t[0]
+            t = tf.convert_to_tensor(t)
+            r = t.shape.rank
+            if r is None or r == 0:
+                return tf.reshape(t, (-1,))[-1:]
+            if r == 1:
+                return t
+            if r == 2:
+                c = t.shape[-1]
+                return tf.squeeze(t, axis=-1) if c == 1 else t[:, -1]
+            return tf.reshape(t, (tf.shape(t)[0], -1))[:, -1]
+        except Exception:
+            return None
 
+    # Find the last convolutional layer
     target_layer = None
     if conv_layer_name:
         try:
             L = model.get_layer(conv_layer_name)
-            if len(L.output.shape) == 4: target_layer = L
+            if len(L.output.shape) == 4:
+                target_layer = L
         except Exception:
             pass
     if target_layer is None:
         for L in reversed(model.layers):
             try:
                 if len(L.output.shape) == 4:
-                    target_layer = L; break
+                    target_layer = L
+                    break
             except Exception:
                 continue
-    if target_layer is None: return None
+    if target_layer is None:
+        return None
+
+    # Create gradient model
+    try:
+        grad_model = tf.keras.Model(
+            inputs=model.inputs if hasattr(model, 'inputs') else model.input,
+            outputs=[target_layer.output, model.output]
+        )
+    except Exception:
+        return None
+
+    # Compute gradients and heatmap
+    with tf.GradientTape(persistent=False) as tape:
+        try:
+            tape.watch(x_100x100x1)
+            conv_out, preds = grad_model(x_100x100x1, training=False)
+            score_vec = _select_score_vector(preds)
+            if score_vec is None:
+                return None
+        except Exception:
+            return None
+
+        try:
+            grads = tape.gradient(score_vec, conv_out)
+            if grads is None:
+                return None
+        except Exception:
+            return None
 
     try:
-        grad_model = tf.keras.Model(inputs=model.input, outputs=[target_layer.output, model.output])
+        weights = tf.reduce_mean(grads, axis=(1, 2), keepdims=True)
+        cam = tf.nn.relu(tf.reduce_sum(weights * conv_out, axis=-1))
+        cam = cam[0].numpy()
+        cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
+        return cam
     except Exception:
-        grad_model = tf.keras.Model(inputs=model.inputs, outputs=[target_layer.output, model.outputs])
-
-    with tf.GradientTape() as tape:
-        conv_out, preds = grad_model(x_100x100x1, training=False)
-        score_vec = _select_score_vector(preds)
-
-    grads = tape.gradient(score_vec, conv_out)
-    if grads is None: return None
-    weights = tf.reduce_mean(grads, axis=(1, 2), keepdims=True)
-    cam = tf.nn.relu(tf.reduce_sum(weights * conv_out, axis=-1))
-    cam = cam[0].numpy()
-    cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
-    return cam
+        return None
 
 def upscale_cam(cam_small, W, H):
     if cam_small is None: return None
