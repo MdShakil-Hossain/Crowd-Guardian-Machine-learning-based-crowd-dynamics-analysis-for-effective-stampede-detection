@@ -918,8 +918,11 @@ def analyze_video(
 
         candidates = current_best.get("candidates", [])
         if candidates:
-            for cand in candidates:
-                cv2.rectangle(frame, (cand["x0"], cand["y0"]), (cand["x1"], cand["y1"]), (0, 0, 255), 2)
+            min_x = min(c['x0'] for c in candidates)
+            min_y = min(c['y0'] for c in candidates)
+            max_x = max(c['x1'] for c in candidates)
+            max_y = max(c['y1'] for c in candidates)
+            cv2.rectangle(frame, (min_x, min_y), (max_x, max_y), (0, 0, 255), 2)
         else:
             x0,y0,x1,y1 = current_best["x0"], current_best["y0"], current_best["x1"], current_best["y1"]
             cv2.rectangle(frame, (x0, y0), (x1, y1), (0, 0, 255), 2)  # fallback to zone box
@@ -1131,10 +1134,10 @@ def analyze_video(
                         rec["sum_dy_norm"] += dy_norm_abs
                         rec["max_dy_norm"] = max(rec["max_dy_norm"], dy_norm_abs)
                         rec["torso_flow_accum"] += (torso_flow + 1e-6) / (scene_mean_flow + 1e-6)
-                        candidates.append({"x0": int(x0r), "y0": int(yh0), "x1": int(x1r), "y1": int(yt1), "type": "crush"})
+                        candidates.append({"x0": int(x0r), "y0": int(yh0), "x1": int(x1r), "y1": int(yt1)})
 
                     if speed > fast_gate and stampede_label == 1:
-                        candidates.append({"x0": int(x0r), "y0": int(yh0), "x1": int(x1r), "y1": int(yt1), "type": "stampede"})
+                        candidates.append({"x0": int(x0r), "y0": int(yh0), "x1": int(x1r), "y1": int(yt1)})
 
                 # fill cnn_cell & compute risk
                 for rec in cell_records:
